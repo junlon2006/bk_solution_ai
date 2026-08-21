@@ -69,8 +69,9 @@ typedef enum {
      *  RTC resources are being torn down. Ends in MYBOT_STATE_STOPPED. */
     MYBOT_STATE_STOPPING,
     /** The device service has accepted a conversation. This includes RTC
-     *  setup, the active session, and conversation teardown until the device
-     *  lifecycle returns to MYBOT_STATE_READY. */
+     *  setup, the active session, and normal conversation teardown until the
+     *  device lifecycle returns to MYBOT_STATE_READY. If runtime connectivity
+     *  is lost, MYBOT_STATE_WIFI_DISCONNECTED takes precedence while offline. */
     MYBOT_STATE_IN_CONVERSATION = 7,
 } mybot_state_t;
 
@@ -132,8 +133,10 @@ MYBOT_API bool mybot_is_running(void);
  * @brief Return the current application lifecycle state.
  *
  * @return One of the mybot_state_t values. During a device-service
- *         conversation, returns MYBOT_STATE_IN_CONVERSATION until conversation
- *         teardown completes.
+ *         conversation with usable connectivity, returns
+ *         MYBOT_STATE_IN_CONVERSATION until normal teardown completes. If
+ *         runtime connectivity is lost, returns MYBOT_STATE_WIFI_DISCONNECTED
+ *         until reconnect.
  *
  * @note Thread-safe (atomic read).
  * @see mybot_state_t
