@@ -36,11 +36,9 @@ typedef struct {
 /**
  * Application-level lifecycle state, returned by mybot_get_state().
  *
- * Describes the startup / runtime state of the whole SDK application instance
- * (Wi-Fi provisioning, service bring-up, connectivity, shutdown). It does not
- * describe device business state: pairing and conversation activity are
- * tracked by the internal device-lifecycle state machine (e.g.
- * MYBOT_DEVICE_STATE_IN_CONVERSATION) and are not exposed here.
+ * Describes the startup / runtime state of the whole SDK application instance,
+ * including Wi-Fi provisioning, service bring-up, conversation activity,
+ * connectivity, and shutdown.
  */
 typedef enum {
     /** Not started, or fully stopped. Entered at the end of mybot_stop()
@@ -56,10 +54,8 @@ typedef enum {
      *  being initialized asynchronously. RTC is initialized on demand when a
      *  conversation starts. A failure here transitions to MYBOT_STATE_FAILED. */
     MYBOT_STATE_STARTING_SERVICES,
-    /** All startup services are up and the device can start/stop conversations
-     *  or re-pair. Note that this state is retained while a conversation is
-     *  active; conversation activity is tracked internally and is not
-     *  reflected in this enum. */
+    /** All startup services are up and the device is ready to start a
+     *  conversation or re-pair. */
     MYBOT_STATE_READY,
     /** Runtime Wi-Fi link was lost (or failed after provisioning);
      *  device-service traffic is paused and any active RTC conversation is
@@ -72,6 +68,11 @@ typedef enum {
     /** mybot_stop() is in progress: worker threads, audio devices, TLS and
      *  RTC resources are being torn down. Ends in MYBOT_STATE_STOPPED. */
     MYBOT_STATE_STOPPING,
+    /** The device service has accepted a conversation. This includes RTC
+     *  setup, the active session, and normal conversation teardown until the
+     *  device lifecycle returns to MYBOT_STATE_READY. If runtime connectivity
+     *  is lost, MYBOT_STATE_WIFI_DISCONNECTED takes precedence while offline. */
+    MYBOT_STATE_IN_CONVERSATION = 7,
 } mybot_state_t;
 
 /**
@@ -89,9 +90,9 @@ typedef enum {
  * development environments whose host already manages the network connection.
  *
  * Preconditions:
- * - Every required platform implementation must be registered first (Wi-Fi, KV,
- *   key, audio capture and playback). LCD and announcement implementations are optional;
- *   a wake-word implementation is required only when MYBOT_WAKE_WORDS is enabled.
+ * - Register a complete mybot_platform_descriptor_t first (recommended), or use the legacy
+ *   individual registration functions. Wi-Fi, KV, key, audio capture and playback are required;
+ *   HTTPS and wake words become required when selected by the build and configuration.
  * - With MYBOT_ENABLE_HTTPS=ON, a "https://" server requires a registered
  *   TLS transport (mybot_https_register()); plain "http://" is rejected
  *   unless MYBOT_ALLOW_INSECURE_HTTP=ON is set for development builds.
@@ -113,6 +114,9 @@ typedef enum {
  *       pair for the duration of that use.
  * @note Call from the main application thread, not from a platform event
  *       callback.
+ * @note Calls to mybot_start() and mybot_stop() are serialized internally. A
+ *       concurrent mybot_stop() waits for startup to finish; a concurrent
+ *       mybot_start() observes the completed active state and returns -1.
  */
 MYBOT_API int mybot_start(const mybot_config_t *cfg);
 
@@ -131,10 +135,11 @@ MYBOT_API bool mybot_is_running(void);
 /**
  * @brief Return the current application lifecycle state.
  *
- * @return One of the mybot_state_t values. The state reflects the
- *         startup / runtime / shutdown phase of the application instance, not
- *         device business state: during an active conversation it stays
- *         MYBOT_STATE_READY.
+ * @return One of the mybot_state_t values. During a device-service
+ *         conversation with usable connectivity, returns
+ *         MYBOT_STATE_IN_CONVERSATION until normal teardown completes. If
+ *         runtime connectivity is lost, returns MYBOT_STATE_WIFI_DISCONNECTED
+ *         until reconnect.
  *
  * @note Thread-safe (atomic read).
  * @see mybot_state_t
@@ -175,6 +180,8 @@ MYBOT_API void mybot_request_exit(void);
  * @warning Blocks until shutdown completes, so it must be called from the
  *          main application thread — never from inside a platform event
  *          callback, an SDK worker thread, or a signal handler.
+ * @note Calls concurrent with mybot_start() are serialized and wait for the
+ *       startup attempt to finish before teardown begins.
  */
 MYBOT_API void mybot_stop(void);
 

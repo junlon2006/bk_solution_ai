@@ -5,6 +5,7 @@
 #include <components/bk_audio/audio_pipeline/audio_pipeline.h>
 #include <components/bk_audio/audio_streams/onboard_mic_stream.h>
 #include <components/bk_audio/audio_streams/raw_stream.h>
+#include <api/aosl_atomic.h>
 #include "mybot_platform_log.h"
 #include <components/system.h>
 #include <os/mem.h>
@@ -29,19 +30,26 @@
 #define MYBOT_CAPTURE_DIGITAL_GAIN 0x30
 #define MYBOT_CAPTURE_ANALOG_GAIN 0x08
 
+typedef enum {
+    BK725X_CAPTURE_IDLE = 0,
+    BK725X_CAPTURE_STARTED,
+    BK725X_CAPTURE_STOPPING,
+} bk725x_capture_state_t;
+
 typedef struct {
     audio_pipeline_handle_t pipeline;
     audio_element_handle_t mic;
     audio_element_handle_t raw_reader;
     bool mic_registered;
     bool raw_reader_registered;
-    bool started;
+    aosl_atomic_t state;
 } bk725x_capture_ctx_t;
 
 static int stop_pipeline(bk725x_capture_ctx_t *capture) {
     int result = 0;
 
-    if (!capture || !capture->started) {
+    if (!capture ||
+        aosl_atomic_xchg(&capture->state, BK725X_CAPTURE_STOPPING) != BK725X_CAPTURE_STARTED) {
         return 0;
     }
 
@@ -54,7 +62,6 @@ static int stop_pipeline(bk725x_capture_ctx_t *capture) {
         result = -1;
     }
 
-    capture->started = false;
     MYBOT_LOGI(TAG, "stop complete, result=%d", result);
     return result;
 }
@@ -175,15 +182,17 @@ int mybot_audio_bk725x_capture_start(void *ctx) {
     if (!capture || !capture->pipeline) {
         return -1;
     }
-    if (capture->started) {
+    if (aosl_atomic_read(&capture->state) == BK725X_CAPTURE_STARTED) {
         return 0;
     }
+    aosl_atomic_set(&capture->state, BK725X_CAPTURE_IDLE);
     if (audio_pipeline_run(capture->pipeline) != BK_OK) {
+        aosl_atomic_set(&capture->state, BK725X_CAPTURE_STOPPING);
         MYBOT_LOGE(TAG, "failed to start capture pipeline");
         return -1;
     }
 
-    capture->started = true;
+    aosl_atomic_set(&capture->state, BK725X_CAPTURE_STARTED);
     MYBOT_LOGI(TAG, "start success");
     return 0;
 }
@@ -197,7 +206,10 @@ int mybot_audio_bk725x_capture_read(void *ctx, void *buf, int frames) {
         MYBOT_LOGE(TAG, "read failed: capture context is NULL");
         return -1;
     }
-    if (!capture->started) {
+    if (aosl_atomic_read(&capture->state) != BK725X_CAPTURE_STARTED) {
+        if (aosl_atomic_read(&capture->state) == BK725X_CAPTURE_STOPPING) {
+            return 0;
+        }
         MYBOT_LOGE(TAG, "read failed: capture not started");
         return -1;
     }
@@ -220,6 +232,9 @@ int mybot_audio_bk725x_capture_read(void *ctx, void *buf, int frames) {
 
     bytes_requested = frames * MYBOT_CAPTURE_BYTES_PER_FRAME;
     bytes_read = raw_stream_read(capture->raw_reader, buf, bytes_requested);
+    if (aosl_atomic_read(&capture->state) != BK725X_CAPTURE_STARTED) {
+        return 0;
+    }
     if (bytes_read == 0 || bytes_read == AEL_IO_TIMEOUT) {
         return 0;
     }

@@ -4,9 +4,17 @@
 
 #include "mybot_platform_log.h"
 
+#include <stdbool.h>
+
 #define TAG "mybot_adapter"
 
+static bool s_registered;
+
 int bk725x_platform_adapters_register(void) {
+    if (s_registered) {
+        return 0;
+    }
+
     if (bk725x_https_platform_register_mbedtls() < 0) {
         MYBOT_LOGE(TAG, "HTTPS adapter registration failed");
         return -1;
@@ -35,6 +43,7 @@ int bk725x_platform_adapters_register(void) {
         return -1;
     }
 
+    s_registered = true;
     MYBOT_LOGI(TAG, "platform adapters ready");
     return 0;
 }

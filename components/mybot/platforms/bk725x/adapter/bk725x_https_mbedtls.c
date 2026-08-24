@@ -30,6 +30,6 @@ int bk725x_https_platform_register_mbedtls(void) {
     }
 
     s_https_registered = true;
-    MYBOT_LOGW(TAG, "backend ready without CA verification: %s", s_https_ops.name);
+    MYBOT_LOGI(TAG, "backend ready with CA verification: %s", s_https_ops.name);
     return 0;
 }

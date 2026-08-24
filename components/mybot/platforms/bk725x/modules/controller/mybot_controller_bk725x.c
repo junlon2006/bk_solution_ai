@@ -24,8 +24,6 @@
 #include <mbedtls/md5.h>
 #include <os/os.h>
 
-#include "mybot_device_lifecycle.h"
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -547,19 +545,32 @@ static int transition_volume_down(app_runtime_t *runtime,
 
 static bool guard_can_toggle_conversation(const app_runtime_t *runtime,
                                           const controller_event_t *event) {
+    mybot_state_t state;
+
     (void)event;
-    return runtime->mybot_active && mybot_get_state() == MYBOT_STATE_READY;
+    state = mybot_get_state();
+    return runtime->mybot_active &&
+           (state == MYBOT_STATE_READY || state == MYBOT_STATE_IN_CONVERSATION);
 }
 
 static int transition_conversation_toggle(app_runtime_t *runtime,
                                           const controller_event_t *event) {
+    mybot_key_action_t action;
+
+    (void)runtime;
     (void)event;
-    mybot_device_state_t state = mybot_device_lifecycle_get_state();
-    if (state == MYBOT_DEVICE_STATE_RUNTIME) {
-        (void)mybot_key_dispatcher_publish(MYBOT_KEY_ACTION_CONVERSATION_START);
-    } else if (state == MYBOT_DEVICE_STATE_IN_CONVERSATION) {
-        (void)mybot_key_dispatcher_publish(MYBOT_KEY_ACTION_CONVERSATION_STOP);
+
+    switch (mybot_get_state()) {
+    case MYBOT_STATE_READY:
+        action = MYBOT_KEY_ACTION_CONVERSATION_START;
+        break;
+    case MYBOT_STATE_IN_CONVERSATION:
+        action = MYBOT_KEY_ACTION_CONVERSATION_STOP;
+        break;
+    default:
+        return 0;
     }
+    (void)mybot_key_dispatcher_publish(action);
     return 0;
 }
 

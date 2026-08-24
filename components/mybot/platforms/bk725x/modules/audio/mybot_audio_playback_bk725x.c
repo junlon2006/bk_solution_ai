@@ -5,6 +5,7 @@
 #include <components/bk_audio/audio_pipeline/audio_pipeline.h>
 #include <components/bk_audio/audio_streams/onboard_speaker_stream.h>
 #include <components/bk_audio/audio_streams/raw_stream.h>
+#include <api/aosl_atomic.h>
 #include "mybot_platform_log.h"
 #include <components/system.h>
 #include <os/mem.h>
@@ -25,13 +26,19 @@
 #define MYBOT_PLAYBACK_OUTPUT_BLOCKS 4
 #define MYBOT_PLAYBACK_WRITE_TIMEOUT_MS 25
 
+typedef enum {
+    BK725X_PLAYBACK_IDLE = 0,
+    BK725X_PLAYBACK_STARTED,
+    BK725X_PLAYBACK_STOPPING,
+} bk725x_playback_state_t;
+
 typedef struct {
     audio_pipeline_handle_t pipeline;
     audio_element_handle_t raw_writer;
     audio_element_handle_t speaker;
     bool raw_writer_registered;
     bool speaker_registered;
-    bool started;
+    aosl_atomic_t state;
     bool published;
 } bk725x_playback_ctx_t;
 
@@ -131,7 +138,9 @@ int mybot_audio_bk725x_playback_get_digital_gain(uint8_t *gain) {
 static int stop_pipeline(bk725x_playback_ctx_t *playback) {
     int result = 0;
 
-    if (!playback || !playback->started) {
+    if (!playback ||
+        aosl_atomic_xchg(&playback->state, BK725X_PLAYBACK_STOPPING) !=
+            BK725X_PLAYBACK_STARTED) {
         return 0;
     }
 
@@ -144,7 +153,6 @@ static int stop_pipeline(bk725x_playback_ctx_t *playback) {
         result = -1;
     }
 
-    playback->started = false;
     MYBOT_LOGI(TAG, "stop complete, result=%d", result);
     return result;
 }
@@ -287,15 +295,17 @@ int mybot_audio_bk725x_playback_start(void *ctx) {
     if (!playback || !playback->pipeline) {
         return -1;
     }
-    if (playback->started) {
+    if (aosl_atomic_read(&playback->state) == BK725X_PLAYBACK_STARTED) {
         return 0;
     }
+    aosl_atomic_set(&playback->state, BK725X_PLAYBACK_IDLE);
     if (audio_pipeline_run(playback->pipeline) != BK_OK) {
+        aosl_atomic_set(&playback->state, BK725X_PLAYBACK_STOPPING);
         MYBOT_LOGE(TAG, "failed to start playback pipeline");
         return -1;
     }
 
-    playback->started = true;
+    aosl_atomic_set(&playback->state, BK725X_PLAYBACK_STARTED);
     MYBOT_LOGI(TAG, "start success");
     return 0;
 }
@@ -308,7 +318,10 @@ int mybot_audio_bk725x_playback_write(void *ctx, const void *buf, int frames) {
         MYBOT_LOGE(TAG, "write failed: playback context is NULL");
         return -1;
     }
-    if (!playback->started) {
+    if (aosl_atomic_read(&playback->state) != BK725X_PLAYBACK_STARTED) {
+        if (aosl_atomic_read(&playback->state) == BK725X_PLAYBACK_STOPPING) {
+            return 0;
+        }
         MYBOT_LOGE(TAG, "write failed: playback not started");
         return -1;
     }
@@ -331,6 +344,9 @@ int mybot_audio_bk725x_playback_write(void *ctx, const void *buf, int frames) {
 
     bytes_requested = frames * MYBOT_PLAYBACK_BYTES_PER_FRAME;
     bytes_written = raw_stream_write(playback->raw_writer, (char *)buf, bytes_requested);
+    if (aosl_atomic_read(&playback->state) != BK725X_PLAYBACK_STARTED) {
+        return 0;
+    }
     if (bytes_written == 0 || bytes_written == AEL_IO_TIMEOUT) {
         return 0;
     }

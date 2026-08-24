@@ -20,16 +20,21 @@ set(priv_incs
 set(sdk_srcs
     src/core/mybot_app.c
     src/core/mybot_device_lifecycle.c
+    src/core/mybot_presenter.c
+    src/core/mybot_state_model.c
     src/core/mybot_version.c
     src/media/mybot_audio.c
+    src/media/mybot_media_pipeline.c
     src/media/mybot_wake_words.c
     src/platform/mybot_announce.c
     src/platform/mybot_https.c
     src/platform/mybot_key.c
     src/platform/mybot_kv_store.c
     src/platform/mybot_lcd.c
+    src/platform/mybot_platform.c
     src/platform/mybot_wifi.c
     src/rtc/mybot_agora_rtc.c
+    src/rtc/mybot_conversation.c
     src/service/mybot_device_client.c
     src/support/mybot_http_client.c
     src/support/mybot_json.c
