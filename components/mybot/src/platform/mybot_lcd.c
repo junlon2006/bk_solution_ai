@@ -4,8 +4,6 @@
 #include "mybot_lcd_internal.h"
 #include "mybot_platform_registry.h"
 
-#include "hal/aosl_hal_thread.h"
-
 #include <stddef.h>
 #include <string.h>
 
@@ -14,11 +12,7 @@ static bool screen_is_valid(mybot_lcd_screen_t screen) {
 }
 
 static int render_content(mybot_lcd_t *lcd, const mybot_lcd_content_t *content) {
-    if (!lcd || !content || !screen_is_valid(content->screen) || !lcd->render_lock) {
-        return -1;
-    }
-
-    if (aosl_hal_mutex_lock(lcd->render_lock) < 0) {
+    if (!lcd || !content || !screen_is_valid(content->screen)) {
         return -1;
     }
 
@@ -26,32 +20,21 @@ static int render_content(mybot_lcd_t *lcd, const mybot_lcd_content_t *content) 
     if (lcd->active) {
         ret = lcd->ops->render(lcd->ctx, content);
     }
-
-    if (aosl_hal_mutex_unlock(lcd->render_lock) < 0) {
-        return -1;
-    }
     return ret;
 }
 
 bool mybot_lcd_is_registered(void) {
-    return mybot_platform_registry_lcd() != NULL;
+    return mybot_platform_registry_get()->lcd != NULL;
 }
 
 int mybot_lcd_init(mybot_lcd_t *lcd) {
-    if (!lcd || lcd->active || !mybot_platform_registry_lcd()) {
+    if (!lcd || lcd->active || !mybot_platform_registry_get()->lcd) {
         return -1;
     }
 
-    lcd->ops = mybot_platform_registry_lcd();
-    lcd->render_lock = aosl_hal_mutex_create();
-    if (!lcd->render_lock) {
-        return -1;
-    }
-
+    lcd->ops = mybot_platform_registry_get()->lcd;
     if (lcd->ops->init(&lcd->ctx) < 0) {
         lcd->ctx = NULL;
-        aosl_hal_mutex_destroy(lcd->render_lock);
-        lcd->render_lock = NULL;
         return -1;
     }
 
@@ -92,12 +75,7 @@ void mybot_lcd_deinit(mybot_lcd_t *lcd) {
         return;
     }
 
-    aosl_hal_mutex_lock(lcd->render_lock);
     lcd->active = false;
     lcd->ops->destroy(lcd->ctx);
     lcd->ctx = NULL;
-    aosl_hal_mutex_unlock(lcd->render_lock);
-
-    aosl_hal_mutex_destroy(lcd->render_lock);
-    lcd->render_lock = NULL;
 }

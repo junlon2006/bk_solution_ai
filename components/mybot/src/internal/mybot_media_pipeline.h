@@ -46,7 +46,6 @@ typedef struct {
     mybot_announce_t announce;
 #if MYBOT_WAKE_WORDS
     mybot_wake_words_t wake_words;
-    bool wake_words_active;
     unsigned int wake_words_process_error_count;
 #endif
 
@@ -82,7 +81,6 @@ typedef struct {
 
 int mybot_media_pipeline_start(mybot_media_pipeline_t *pipeline,
                                const mybot_media_pipeline_callbacks_t *callbacks);
-void mybot_media_pipeline_request_stop(mybot_media_pipeline_t *pipeline);
 void mybot_media_pipeline_stop(mybot_media_pipeline_t *pipeline);
 void mybot_media_pipeline_destroy(mybot_media_pipeline_t *pipeline);
 
