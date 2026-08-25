@@ -90,11 +90,11 @@ typedef enum {
  * development environments whose host already manages the network connection.
  *
  * Preconditions:
- * - Register a complete mybot_platform_descriptor_t first (recommended), or use the legacy
- *   individual registration functions. Wi-Fi, KV, key, audio capture and playback are required;
- *   HTTPS and wake words become required when selected by the build and configuration.
- * - With MYBOT_ENABLE_HTTPS=ON, a "https://" server requires a registered
- *   TLS transport (mybot_https_register()); plain "http://" is rejected
+ * - Register one complete mybot_platform_descriptor_t first. Wi-Fi, KV, key, audio capture and
+ *   playback are required; HTTPS and wake words become required when selected by the build and
+ *   configuration.
+ * - With MYBOT_ENABLE_HTTPS=ON, a "https://" server requires a TLS transport in the registered
+ *   platform descriptor; plain "http://" is rejected
  *   unless MYBOT_ALLOW_INSECURE_HTTP=ON is set for development builds.
  *
  * The configuration is validated (non-NULL cfg, NUL-terminated strings,
@@ -149,10 +149,10 @@ MYBOT_API mybot_state_t mybot_get_state(void);
 /**
  * @brief Request a graceful application exit.
  *
- * Non-blocking: only clears the running flag so mybot_is_running() starts
- * returning false; no worker thread or resource is torn down here. The host
- * main loop observes the flag change and should then call mybot_stop() to
- * release threads and devices.
+ * Non-blocking: publishes an exit request so mybot_is_running() starts returning
+ * false; no worker thread or resource is torn down here. The host main loop
+ * observes the request and should then call mybot_stop() to release threads and
+ * devices.
  *
  * Safe to call from any normal thread or event callback (key EXIT events, UI
  * commands) and idempotent — repeated calls are harmless. A POSIX signal

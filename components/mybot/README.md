@@ -1,174 +1,475 @@
-# mybot Component
+# mybot
 
-`mybot` 是 BK7258 方案中承上启下的共享组件：对上被 `projects/mybot` 以薄入口启动，对下通过 `platforms/bk725x` 适配 BK SDK、Wi-Fi、音频、显示、存储和 SWD/配网能力。
+[![CI](https://github.com/junlon2006/mybot/actions/workflows/ci.yml/badge.svg)](https://github.com/junlon2006/mybot/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/junlon2006/mybot)](LICENSE)
 
-## 目录与职责
+**[English](README.md) | [简体中文](README.zh-CN.md)**
 
-### Project 层
+`mybot` is a cross-platform **AI voice-chat SDK** for edge devices: it lets smart devices hold
+real-time voice conversations with cloud AI agents over Agora RTC. The SDK handles APSTA
+provisioning, device pairing and authentication, a conversation state machine, full-duplex voice
+interaction (Agora RTSA with Agora AI capabilities), button/LCD workflows, and optional local wake-word
+recognition. Platform-specific capabilities are injected through a small set of `ops` interfaces;
+the core depends only on C99 and AOSL and can be ported to virtually any platform — Linux, an
+RTOS, or a bare-metal MCU.
 
-| 路径 | 职责 |
-| --- | --- |
-| `projects/mybot/ap` | AP 启动入口：`bk_init()`、`media_service_init()`、`mybot_controller_start()` |
-| `projects/mybot/cp` | CP 启动入口与 SMP boot 控制 |
-| `projects/mybot/partitions` | BK7258 分区表 |
-| `projects/mybot/ap/config` | AP 板级 Kconfig / GPIO 配置 |
+> Current version: **1.0.0**. The bundled Agora RTSA
+> binary and AOSL have separate licensing and usage terms; read
+> [License and third-party dependencies](#license-and-third-party-dependencies) before using the
+> SDK in a product.
 
-### Component 层
+## Table of Contents
 
-| 路径 | 职责 |
-| --- | --- |
-| `include/mybot` | 对外公开 API，只暴露平台无关的 SDK 接口 |
-| `src/core` | 应用生命周期、设备生命周期、协议状态、版本 |
-| `src/service` | 云端设备客户端与请求协程 |
-| `src/support` | HTTP client、JSON、ring buffer 等基础支撑 |
-| `src/media` | SDK 内部音频抽象与 wake word 抽象 |
-| `src/rtc` | Agora RTC 会话管理 |
-| `platforms/bk725x/adapter` | 将 BK 平台能力注入 SDK ops 接口 |
-| `platforms/bk725x/modules/controller` | AP 应用控制器，事件循环与生命周期编排 |
-| `platforms/bk725x/modules/audio` | 采集、共享播放、音量、ogg 解码、prompt player |
-| `platforms/bk725x/modules/network` | 配网 portal、Wi-Fi 凭据、connectivity |
-| `platforms/bk725x/modules/display` | 双屏显示与帧渲染 |
-| `platforms/bk725x/modules/button`、`event`、`key` | 按键输入、事件队列、按键分发 |
-| `platforms/bk725x/modules/storage` | KV、SD 卡与 USB MSC |
+- [Features](#features)
+- [Conversation flow](#conversation-flow)
+- [Boundaries and limitations](#boundaries-and-limitations)
+- [Quick start](#quick-start)
+- [Integrating into a host project](#integrating-into-a-host-project)
+- [Build configuration](#build-configuration)
+- [Architecture](#architecture)
+- [Repository layout](#repository-layout)
+- [Documentation](#documentation)
+- [Development and verification](#development-and-verification)
+- [Contributing and support](#contributing-and-support)
+- [License and third-party dependencies](#license-and-third-party-dependencies)
 
-## AP 启动流程
+## Features
+
+- **Real-time AI conversation**: Hold live voice chats with a cloud AI agent; speech recognition,
+  language-model reasoning, and speech synthesis (ASR / LLM / TTS) are orchestrated in the cloud.
+- **Portable to virtually any platform**: The core depends only on C99 and AOSL, and device
+  capabilities are injected through the `ops` contract, so it never touches any OS or peripheral
+  API directly — Linux, an RTOS, or a bare-metal MCU.
+- **APSTA provisioning**: Non-blocking startup; Wi-Fi events drive the application state machine.
+- **Pairing and authentication**: Pair code → device claim → persisted long-lived credential, with
+  automatic re-pairing when authentication is rejected.
+- **Conversation state machine**: Five device-service lifecycle states — `unprovisioned / pairing /
+  awaiting_claim / runtime / in_conversation` — drive the device-server interaction.
+- **Application lifecycle state**: `mybot_get_state()` exposes startup, connectivity, shutdown, and
+  conversation state. After the device service accepts a conversation it returns
+  `MYBOT_STATE_IN_CONVERSATION`; normal teardown returns to `MYBOT_STATE_READY`, while
+  `MYBOT_STATE_WIFI_DISCONNECTED` takes precedence when connectivity is lost.
+- **Full-duplex voice · barge-in**: Uplink and downlink run simultaneously; the user can interrupt
+  the AI mid-reply at any time, and the microphone keeps streaming so the cloud agent hears and
+  responds to new input.
+- **Full-duplex voice interaction · Agora AI capabilities**: Built on Agora RTSA, with cloud AEC, AI
+  QoS, and optional real-time transcription.
+- **Volume control**: The SDK owns volume. When the platform registers a real-device volume
+  implementation (codec / amplifier / mixer), volume changes drive hardware volume directly; otherwise
+  the SDK falls back to a digital software gain applied to playback PCM. There is no
+  application-facing volume API.
+- **Optional local wake words**: Off by default; wake behavior is identical to starting a
+  conversation with a physical button.
+- **Button and LCD workflows**: Semantic screen states (provisioning / pair code / ready / in
+  conversation); how each is displayed is up to the platform.
+- **Pairing-code voice prompt**: Once per pair code, plays a fixed prompt ("Please enter the
+  pairing code in the console") followed by one sound per digit through the normal speaker path. Assets are raw
+  16 kHz mono s16 PCM files under `./assets/locales/<locale>/` (`prompt.pcm`, `0.pcm`..`9.pcm`);
+  the platform owns them and the SDK core contains no audio decoder.
+- **HTTPS transport**: The device service accepts HTTPS only by default. Linux uses OpenSSL; MCU
+  platforms may integrate mbedTLS or a vendor TLS and must validate the certificate chain and host
+  name.
+
+## Boundaries and limitations
+
+- Audio is fixed at 16 kHz, mono, 16-bit PCM; `ptime` is configurable to 20/40/60 ms (default
+  60 ms).
+- The RTC implementation is specific to Agora RTSA; no other RTC protocol adapter is provided.
+- Local ASR wake words are an optional platform implementation, off by default; enabling them
+  requires the platform to register an implementation.
+- The Wi-Fi interface targets APSTA provisioning scenarios.
+- The device server is not part of this repository; running the examples requires a compatible
+  server endpoint.
+
+## Conversation flow
+
+The SDK establishes a real-time audio channel with a cloud AI agent over Agora RTC, forming a
+complete voice conversation loop:
 
 ```mermaid
 flowchart LR
-    A[ap_main] --> B[bk_init]
-    B --> C[media_service_init]
-    C --> D[mybot_controller_start]
-    D --> E[controller_thread]
-    E --> F[build_device_config]
-    F --> G[display / sdcard / event / button]
-    G --> H[read saved Wi-Fi credentials]
-    H --> I[reconcile initial wifi mode]
-    I --> J[event loop]
-    J --> K[handle_event]
-    J --> L[tick]
-    K --> M[controller_dispatch]
-    L --> M
+    user["User speaks"] --> mic["Microphone · capture"]
+    mic --> up["Agora RTC uplink"]
+    up --> agent["Cloud AI agent<br/>ASR · LLM · TTS"]
+    agent --> down["Agora RTC downlink"]
+    down --> spk["Speaker · playback"]
+    spk --> reply["User hears the AI reply"]
 ```
 
-关键实现：
+- **Uplink**: the device captures 16 kHz PCM from the microphone and sends it to the cloud AI agent
+  over Agora RTC.
+- **Cloud orchestration**: the AI agent performs speech recognition (ASR), language-model reasoning
+  and reply generation (LLM), and speech synthesis (TTS).
+- **Downlink**: the AI reply audio returns over Agora RTC and plays out on the device speaker.
+- **Session scheduling**: the device server handles pairing / claim and allocates the RTC channel for
+  each conversation.
 
-- `bk_solution_ai/projects/mybot/ap/ap_main.c`
-- `components/mybot/platforms/bk725x/modules/controller/mybot_controller_bk725x.c`
+The loop is **full-duplex**: uplink and downlink run at the same time, with no turn-taking. The user
+can **interrupt** the AI at any point mid-reply — the device keeps the microphone streaming, and the
+cloud agent detects the new input, stops its reply, and listens for the new command.
 
-## Controller 三层状态机
+For the device-side audio pipeline and state machine, see [Architecture](#architecture).
 
-### State 层
+## Quick start
 
-状态由 `controller_sync_state()` 根据当前 `wifi_mode`、`network_connected` 和 `mybot_active` 派生，不单独赋语义 FSM 状态，避免两套状态源不一致。
+The Linux reference platform lets you run the full workflow on a development machine. Requirements:
+Linux x86_64, CMake 3.16+, a C99 compiler, and ALSA and OpenSSL development packages. The bundled
+Agora RTSA static library is also the x86_64 Linux build. AOSL is pulled in as a pinned git
+submodule: initialize it before the first build (or clone with `--recurse-submodules`).
 
-| 状态 | 含义 |
-| --- | --- |
-| `CONTROLLER_STATE_WIFI_IDLE` | Wi-Fi 模式切换的中间态 |
-| `CONTROLLER_STATE_PROVISIONING` | APSTA 配网模式 |
-| `CONTROLLER_STATE_NETWORK_DISCONNECTED` | 普通 STA 模式，网络未连接 |
-| `CONTROLLER_STATE_NETWORK_CONNECTED_STOPPED` | 已连接但 mybot SDK 未运行 |
-| `CONTROLLER_STATE_NETWORK_CONNECTED_ACTIVE` | 已连接且 SDK 运行中 |
-| `CONTROLLER_STATE_NETWORK_DISCONNECTED_ACTIVE` | SDK 运行中但网络已断开 |
+```bash
+git submodule update --init --recursive
+sudo apt-get update
+sudo apt-get install -y build-essential cmake libasound2-dev libssl-dev
+cmake -S . -B build -DCONFIG_PLATFORM=linux -DMYBOT_ENABLE_ASAN=OFF
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
 
-### Event 层
+Run the example:
 
-外部事件由 `controller_event_from_mybot()` 从 `MYBOT_EVENT_*` 映射为 controller 内部事件；`controller_tick()` 再产生定时 poll 事件。
+```bash
+./build/examples/linux/mybot \
+  --server https://api.example.com \
+  --device-id AG-DEMO-001 \
+  --fw-ver 1.0.0 \
+  --hw-model linux-reference
+```
 
-| 类型 | 事件 |
-| --- | --- |
-| 外部按键 | volume up / down / conversation toggle / provisioning request |
-| 外部网络 | network connected / disconnected / failed |
-| 外部配网 | provisioning completed / failed |
-| 定时轮询 | network state、provisioning state、wifi reconcile、mybot running、mybot restart |
+The example also plays an optional pairing-code voice prompt ("Please enter the pairing code in the console...") from
+`./assets/locales/<locale>/` (raw 16 kHz mono s16 PCM: `prompt.pcm`, `0.pcm`..`9.pcm`).
+The default locale is `zh-CN`; set `MYBOT_LOCALE` and `MYBOT_ASSETS_DIR` to override.
 
-### Transition 层
+Once ready, press `s` to start a conversation, `q` to stop it, `p` to re-pair, `u` / `d` to raise /
+lower the volume, `e` to exit.
 
-所有状态转移集中在 `s_transitions[]`，每行声明：
+The Linux reference implementation is a **development stand-in**: it reuses the host network and
+reports STA as connected immediately; it does not implement real APSTA provisioning. Audio uses the
+ALSA `default` device. KV data is written to `.mybot-kv-store/` in the current directory by default;
+override the location with the `MYBOT_KV_STORE_DIR` environment variable.
 
-- `event`：触发事件
-- `from_states`：合法源状态掩码
-- `guard`：可选前置条件，例如 `event_is_from_current_wifi()`
-- `handler`：执行具体副作用
+## Integrating into a host project
 
-分发入口为 `controller_dispatch()`。`handle_event()` 只负责翻译外部事件，`tick()` 只按顺序派发 5 个 poll 事件：
+We recommend vendoring the repository as a source submodule, and mybot itself depends on AOSL
+through a nested submodule — initialize submodules after adding it with
+`git submodule update --init --recursive`.
+The host must provide an Agora RTSA header and static library matching the target architecture and
+ensure AOSL supports the target platform.
 
-1. `POLL_NETWORK_STATE`
-2. `POLL_PROVISIONING_STATE`
-3. `POLL_WIFI_RECONCILE`
-4. `POLL_MYBOT_RUNNING`
-5. `POLL_MYBOT_RESTART`
+An installed package is also supported: `cmake --install` exports `mybot::sdk` (and the bundled
+`mybot::aosl`), and a consumer project can use `find_package(mybot CONFIG REQUIRED)` after pointing
+`MYBOT_AGORA_SDK_DIR` / `MYBOT_AGORA_RTC_LIBRARY` at a target-architecture Agora RTSA package.
 
-### 生命周期示意
+```cmake
+set(CONFIG_PLATFORM my_mcu CACHE STRING "" FORCE)
+set(AGORA_SDK_DIR /opt/agora-rtsa CACHE PATH "" FORCE)
+set(AGORA_RTC_LIBRARY /opt/agora-rtsa/lib/libagora-rtc-sdk.a CACHE FILEPATH "" FORCE)
+
+set(MYBOT_BUILD_LINUX_PLATFORM OFF CACHE BOOL "" FORCE)
+set(MYBOT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(MYBOT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(MYBOT_AUDIO_PTIME_MS 60 CACHE STRING "" FORCE)
+set(MYBOT_WAKE_WORDS OFF CACHE BOOL "" FORCE)
+set(MYBOT_ENABLE_HTTPS ON CACHE BOOL "" FORCE)
+
+add_subdirectory(third_party/mybot)
+target_link_libraries(device_firmware PRIVATE mybot::sdk)
+```
+
+Register one `mybot_platform_descriptor_t` before `mybot_start()`. A non-NULL ops pointer is the sole
+declaration that the platform supports that function. Registration validates the complete descriptor,
+including the required Wi-Fi, KV, key, capture, and playback tables, before committing it atomically.
+`mybot_start()` then checks the ops required by the active build and runtime configuration before
+creating any platform resources. Every platform is submitted through this one descriptor. For the
+full implementation order, minimal code, threading constraints, and acceptance checklist, see
+[docs/PORTING.md](docs/PORTING.md).
+
+Minimal application lifecycle:
+
+```c
+platform_register_all();
+mybot_start(&config);
+while (mybot_is_running()) {
+    platform_sleep_ms(100);
+}
+mybot_stop();
+```
+
+`mybot_start()` is non-blocking: it starts provisioning first, then initializes storage,
+buttons, audio, and the device service asynchronously once usable network connectivity is
+reported. RTC is initialized on demand when a conversation starts.
+`mybot_start()` and `mybot_stop()` are thread-safe and serialize their work through the application
+lifecycle gate and control owner. `mybot_stop()` waits for all worker threads to exit and must not be
+called from inside a platform or SDK callback. The application acquires one reference to the
+process-wide AOSL runtime inside `mybot_start()` and releases it at the end of `mybot_stop()`.
+Agora RTC acquires and releases its own independent AOSL reference in `agora_rtc_init()` /
+`agora_rtc_fini()`. A host that uses AOSL
+directly must keep its own `aosl_ctor()` / `aosl_dtor()` pair balanced; the runtime is finalized only
+after every consumer has released its reference.
+
+## Build configuration
+
+The following options can be set via the CMake command line or cache variables before the host's
+`add_subdirectory()` call:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `MYBOT_AUDIO_PTIME_MS` | `60` | Audio packet duration; accepts only 20, 40, 60 ms |
+| `MYBOT_CLOUD_AEC` | `ON` | Server-side AEC; the uplink carries mic and reference channels |
+| `MYBOT_WAKE_WORDS` | `OFF` | Enable the platform local-ASR wake-word implementation |
+| `MYBOT_AI_QOS` | `ON` | Agora AI QoS |
+| `MYBOT_FAST_SEND_MULTIPLIER` | `3` | Fast-send multiplier; accepts only 1–5 |
+| `MYBOT_SHOW_TRANSCRIPT` | `OFF` | Request the real-time transcription data stream |
+| `MYBOT_ENABLE_HTTPS` | `ON` | Enable the platform HTTPS transport; keep ON for production builds |
+| `MYBOT_ALLOW_INSECURE_HTTP` | `OFF` | Local development only: explicitly allow plaintext HTTP |
+| `MYBOT_ENABLE_ASAN` | `OFF` | GCC/Clang AddressSanitizer; recommended for host tests |
+| `MYBOT_ENABLE_UBSAN` | `OFF` | GCC/Clang UndefinedBehaviorSanitizer; recommended for host tests |
+| `MYBOT_ENABLE_COVERAGE` | `OFF` | Instrument mybot targets for gcov; used by the CI coverage job |
+
+Two independent variables select platform code: `CONFIG_PLATFORM` chooses the AOSL HAL port
+consumed by `third_party/aosl` (e.g. `linux`, `esp32`), while `MYBOT_BUILD_LINUX_PLATFORM` builds
+the bundled Linux reference implementations (`platforms/linux/`: ALSA, stdin, file KV, console LCD,
+OpenSSL) and requires `CONFIG_PLATFORM=linux`. An MCU port sets `CONFIG_PLATFORM=my_mcu` and keeps
+`MYBOT_BUILD_LINUX_PLATFORM=OFF`.
+
+For example:
+
+```bash
+cmake -S . -B build-wake \
+  -DCONFIG_PLATFORM=linux \
+  -DMYBOT_AUDIO_PTIME_MS=20 \
+  -DMYBOT_WAKE_WORDS=ON
+```
+
+The Linux reference platform has no local ASR implementation, so enabling `MYBOT_WAKE_WORDS`
+requires the host to register an additional implementation; otherwise the app fails to start with a
+clear error.
+
+Plaintext HTTP never falls back automatically. Only in an isolated local development environment may
+you configure `-DMYBOT_ENABLE_HTTPS=OFF -DMYBOT_ALLOW_INSECURE_HTTP=ON`. This combination transmits
+device credentials and RTC parameters in cleartext and must not be used on devices, shared
+networks, or release builds.
+
+## Architecture
+
+The SDK uses a layered architecture: the host application drives the core through the public API,
+the core modules sit on top of the AOSL portability layer and the platform `ops` contract, and all
+platform differences are absorbed by the platform implementations. The device server, the Agora RTC cloud,
+and the cloud AI agent are runtime external dependencies and are not part of this repository.
+
+```mermaid
+flowchart TB
+    subgraph host["Host application"]
+        host_app["Device firmware / Linux example"]
+    end
+
+    subgraph api["Public API · include/mybot"]
+        api_h["mybot_start / mybot_is_running / mybot_stop<br/>mybot_get_state · mybot_request_exit"]
+    end
+
+    subgraph core["SDK core · src/"]
+        app_c["mybot_app<br/>startup orchestration · event dispatch · threads"]
+        app_state["Application state model<br/>phase · connectivity · device projection"]
+        presenter["LCD presenter<br/>state projection · semantic screens"]
+        state_m["Device state machine<br/>pairing · claim · conversation lifecycle"]
+        svc_c["Device-service client<br/>pair / claim / conversation polling"]
+        rtc_c["Agora RTC<br/>RTSA wrapper"]
+        media_c["Audio pipeline<br/>ring buffers · AEC reference · wake words"]
+    end
+
+    subgraph infra["Foundation layer"]
+        aosl["AOSL<br/>MPQ threads · timers · atomics · logging"]
+        ops["Platform ops contract<br/>wifi · kv_store · key · lcd<br/>audio · https · announce · asr"]
+    end
+
+    subgraph plat["Platform implementations"]
+        linux_b["Linux reference<br/>ALSA · stdin · file · console · OpenSSL"]
+        mcu_b["MCU implementation · host-provided"]
+    end
+
+    subgraph ext["External services · cloud"]
+        svc_e["Device server<br/>pairing · claim · session scheduling (HTTPS)"]
+        agora_e["Agora RTC cloud"]
+        agent_e["AI agent<br/>ASR · LLM · TTS"]
+    end
+
+    host_app --> api_h
+    api_h --> app_c
+    api_h --> app_state
+    app_c --> state_m
+    app_c --> app_state
+    state_m --> app_state
+    app_state --> presenter
+    app_c --> media_c
+    state_m --> svc_c
+    svc_c --> rtc_c
+    rtc_c <--> media_c
+    app_c --> aosl
+    app_c --> ops
+    presenter --> ops
+    svc_c --> aosl
+    rtc_c --> aosl
+    media_c --> aosl
+    ops --> linux_b
+    ops --> mcu_b
+    svc_c -->|HTTPS polling| svc_e
+    rtc_c -->|real-time audio| agora_e
+    agora_e <--> agent_e
+    svc_e -->|schedules session| agent_e
+```
+
+Layer notes:
+
+- **Public API** ([include/mybot/mybot.h](include/mybot/mybot.h)): application lifecycle and
+  state queries (`mybot_start` / `mybot_is_running` / `mybot_get_state` / `mybot_request_exit` /
+  `mybot_stop`); non-blocking startup. Use `mybot_get_state()` for key or UI decisions:
+  `MYBOT_STATE_READY` can start a conversation and `MYBOT_STATE_IN_CONVERSATION` can stop one.
+  LCD output is only a rendering result, not a source of lifecycle state. Conversation and pairing
+  actions are triggered by platform key / wake-word events and handled inside the SDK core. Wi-Fi
+  and device-lifecycle events update one atomic state-model snapshot; `mybot_get_state()` and the LCD
+  presenter derive their views from that same snapshot.
+- **SDK core** ([src/](src/)): one control owner serializes application state, the device lifecycle,
+  RTC control, UI and volume actions, and resource startup and shutdown. Control callbacks only
+  publish short events or atomic mailboxes to that owner. The core also contains the
+  device-service HTTP client, the Agora RTSA session wrapper, audio ring buffers, and the optional
+  local wake-word engine. Core code never touches any OS or peripheral API directly.
+- **Foundation layer**: AOSL provides portable threads / MPQ queues / timers / logging; the
+  platform `ops` contract defines the device capabilities the SDK requires. Both are implementable
+  per platform.
+- **Platform implementations**: the Linux reference implementation and each MCU platform register
+  against the same contract.
+- **External services**: the device server (pairing / claim / session scheduling, HTTPS only), the
+  Agora RTC cloud (real-time audio transport), and the cloud AI agent (speech recognition /
+  understanding / synthesis).
+
+### Threading model
+
+`mybot_start()` creates four core worker threads (AOSL MPQ queues) with strictly separated
+responsibilities:
+
+| Thread (MPQ) | Driven by | Responsibility |
+| --- | --- | --- |
+| `control_mpq` | Events and 100 ms timer | Owns application state, device lifecycle, blocking HTTP/RTC control, UI/volume actions, and resource transitions |
+| `mybot_mpq` | ptime timer | Sends uplink audio at the packetization cadence (Agora RTSA) |
+| `cap_mpq` | ptime timer | Mic capture → capture ring buffer → (optional) wake words |
+| `pb_mpq` | ptime timer | Playback ring buffer → speaker; also feeds the AEC reference channel |
+
+Callbacks keep their work bounded: they enqueue a short control event or publish an atomic mailbox.
+PCM capture, RTC uplink/downlink, and playback stay on the direct data path and never pass through
+`control_mpq`. The real-time audio timers (cap / pb / send) are independent, so blocking control or
+device-service work cannot stall the audio cadence.
+
+### Workflows
+
+#### Device state machine
 
 ```mermaid
 stateDiagram-v2
-    [*] --> WIFI_IDLE
-    WIFI_IDLE --> PROVISIONING: desired provisioning
-    WIFI_IDLE --> NETWORK_DISCONNECTED: desired network
-
-    PROVISIONING --> NETWORK_DISCONNECTED: provisioning completed
-    PROVISIONING --> PROVISIONING: provisioning failed / retry
-
-    NETWORK_DISCONNECTED --> NETWORK_CONNECTED_STOPPED: network connected
-    NETWORK_CONNECTED_STOPPED --> NETWORK_CONNECTED_ACTIVE: start_mybot or restart due
-    NETWORK_CONNECTED_STOPPED --> NETWORK_DISCONNECTED: network disconnected
-    NETWORK_CONNECTED_ACTIVE --> NETWORK_DISCONNECTED_ACTIVE: network disconnected
-    NETWORK_DISCONNECTED_ACTIVE --> NETWORK_CONNECTED_ACTIVE: network connected
-    NETWORK_DISCONNECTED_ACTIVE --> NETWORK_DISCONNECTED: SDK stopped unexpectedly
-
-    PROVISIONING --> [*]: deinit / cleanup
-    NETWORK_DISCONNECTED --> [*]: deinit / cleanup
-    NETWORK_CONNECTED_STOPPED --> [*]: deinit / cleanup
-    NETWORK_CONNECTED_ACTIVE --> [*]: deinit / cleanup
-    NETWORK_DISCONNECTED_ACTIVE --> [*]: deinit / cleanup
+    [*] --> unprovisioned
+    unprovisioned --> pairing: start pairing
+    pairing --> awaiting_claim: pair code received
+    awaiting_claim --> runtime: device claimed
+    runtime --> in_conversation: conversation starts
+    in_conversation --> runtime: conversation ends
+    runtime --> unprovisioned: auth rejected
+    in_conversation --> unprovisioned: auth rejected
 ```
 
-该图为简化示意，最终判定以 `s_transitions[]` 和 `controller_sync_state()` 为准。
+When device authentication is rejected, the device returns to `unprovisioned` and automatically
+restarts pairing on the next state-machine tick.
 
-## 新增/修改 controller 事件时
+#### Audio data flow
 
-- 先在 `controller_state_t` 中确认是否需要新增状态。
-- 在 `controller_event_kind_t` 中增加事件，并补 `controller_event_from_mybot()` 映射（外部事件才有此步骤）。
-- 在 `s_transitions[]` 增加一行；状态范围使用状态掩码宏。
-- guard 只做纯判断，side effects 放在 handler。
-- 不要直接给 `app_runtime_t.state` 赋值，状态只能由 `controller_sync_state()` 派生。
+```mermaid
+flowchart LR
+    mic["Microphone"] -->|capture ops| cap["Capture worker (cap_mpq)"]
+    cap --> capbuf["Capture ring buffer"]
+    cap --> wake["Local wake words · when idle"]
+    capbuf --> send["Send worker (mybot_mpq)"]
+    send -->|ptime frames| rtc_u["Agora RTC uplink"]
 
-## 语音提示资源（assets）
+    rtc_d["Agora RTC downlink"] --> pbbuf["Playback ring buffer"]
+    pbbuf --> pb["Playback worker (pb_mpq)"]
+    pb -->|playback ops| spk["Speaker"]
+    pb -.->|AEC reference| send
+```
 
-提示语音存放在 `projects/mybot/assets`（按 `locales/<lang>` 组织），音频为
-Opus-in-Ogg（16 kHz 单声道、24 kbps VBR）。资源以 C 数组嵌入 AP 固件，播放器
-直接从固件中的只读数组读取 OGG 数据并解码，不依赖 SD 卡上的资源文件。
+With `MYBOT_CLOUD_AEC=ON`, the downlink audio is interleaved with the microphone signal as a
+reference channel and sent uplink together, letting the server cancel echo. The uplink and downlink
+run concurrently (**full-duplex**): the microphone keeps streaming during AI replies, which is what
+lets the cloud agent support user interruption.
 
-修改或新增语音后，先转换并重新生成数组，再编译固件：
+## Repository layout
 
-1. **转换**：`projects/mybot/scripts/convert_pcm_to_ogg.sh` 把 16 kHz mono s16le
-   PCM 转成 `.ogg`。编码参数固定，解码器 `mybot_ogg_pcm_bk725x.c` 依赖该参数，
-   不要手工指定其它编码方式。
-2. **生成数组**：
+```text
+mybot/
+├── include/mybot/          # public headers and platform interface specifications
+├── src/                    # cross-platform implementation; internal/ is not public API
+├── platforms/linux/        # Linux reference implementations (ALSA/stdin/file/console)
+├── examples/linux/         # Linux example application entry
+├── tests/                  # unit, platform, and host integration tests
+├── docs/                   # porting and release guides
+├── cmake/                  # toolchain helpers
+└── third_party/            # AOSL submodule and the Agora RTSA SDK
+```
 
-   ```bash
-   python3 projects/mybot/scripts/generate_assets_c.py \
-     projects/mybot/assets \
-     components/mybot/platforms/bk725x/modules/storage/mybot_assets.c
-   ```
+Key CMake targets:
 
-   生成器只收集 `assets/locales/**/*.ogg`，许可证和说明文件不会进入数组。
-3. **编译**：执行 `make bk7258`，`mybot_assets.c` 会作为 `mybot` 组件源文件编译进 AP 固件。
+- `mybot::sdk` — the cross-platform SDK core (AOSL + Agora RTSA).
+- `mybot::platform_linux` — the Linux reference implementation; not part of the cross-platform core.
+- `mybot::linux_example` — the Linux CLI example application.
 
-现有文件与播放路径的对应关系：
+## Documentation
 
-- `wificonfig.ogg` / `success.ogg` → `modules/audio/mybot_prompt_player_bk725x.c`
-  （`mybot_prompt_player_bk725x_play_provisioning()` / `_play_success()`）。
-- `prompt.ogg`、`0.ogg`~`9.ogg`（配对码播报）→
-  `modules/announce/mybot_announce_pcm_bk725x.c` 的 `sound_file_name()`，通过
-  `mybot_announce_sound_t` 枚举调用。
+- [docs/PORTING.md](docs/PORTING.md) ([简体中文](docs/PORTING.zh-CN.md)) — porting guide and
+  acceptance checklist
+- [docs/EMBEDDED.md](docs/EMBEDDED.md) ([简体中文](docs/EMBEDDED.zh-CN.md)) — footprint, memory,
+  thread/stack, timing, power and logging guidance for MCU integrators
+- [docs/RELEASING.md](docs/RELEASING.md) ([简体中文](docs/RELEASING.zh-CN.md)) — release process
+- [CHANGELOG.md](CHANGELOG.md) — version history
+- API reference — generated by Doxygen from the public headers with
+  `doxygen build/docs/Doxyfile`; CI builds it on every push / PR and publishes it as an artifact
 
-新增语音除了放文件并重新生成数组，还需在上述模块里加对应的播放路径/枚举才会被
-引用。数组保存压缩后的 OGG 字节，会占用 AP 固件的 Flash 空间；解码后的 PCM
-缓冲区仍在运行时分配到 PSRAM。新增大量音频时请检查 AP 固件的 Flash 使用率。
+## Development and verification
 
-## 资源归属约定
+```bash
+cmake -S . -B build -DCONFIG_PLATFORM=linux -DMYBOT_ENABLE_ASAN=ON
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+find include src platforms/linux examples/linux tests -type f \
+  \( -name '*.c' -o -name '*.h' \) \
+  -exec clang-format --dry-run --Werror {} +
+```
 
-- 平台无关 core 使用 `aosl_hal_malloc` 系列。
-- BK725x 平台模块和 PSRAM 数据使用 `psram_malloc` / `psram_zalloc` / `psram_free`。
-- 共享播放管线的 start/stop 和 audio power vote 统一由 audio 模块负责，controller 只编排调用顺序。
+- Host-checked C code follows the root `.clang-format`; `third_party/` keeps upstream content,
+  and BK725x Armino sources use their firmware toolchain's formatting rules.
+- CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the build, tests, and format check
+  on every push / PR; make sure your local commands match CI before merging.
+- CI builds with both GCC and Clang under ASan and UBSan, runs cppcheck and clang-tidy static
+  analysis, and publishes gcov/lcov coverage to Codecov.
+- Commit messages follow Conventional Commits (see `CONTRIBUTING.md`). Install the local
+  `commit-msg` hook once per clone with `./scripts/setup-githooks.sh`; CI validates every pushed /
+  PR commit subject.
+
+## Contributing and support
+
+We welcome issues, discussions, and pull requests. Before you start, please read (each document is
+available in English and Simplified Chinese):
+
+- [CONTRIBUTING](CONTRIBUTING.md) ([简体中文](CONTRIBUTING.zh-CN.md)) — development workflow and contribution guidelines
+- [SUPPORT](SUPPORT.md) ([简体中文](SUPPORT.zh-CN.md)) — how to get help
+
+## License and third-party dependencies
+
+Our own code is released under the Apache License 2.0 in the root [LICENSE](LICENSE). This does not
+change the licensing of third-party components:
+
+- AOSL carries additional conditions listed in `third_party/aosl/LICENSE`.
+- The Agora RTSA SDK binary is subject to its software license, trial period, and commercial
+  licensing requirements. The bundled x86_64 Linux binary is for development/demo use only;
+  commercial or production use and redistribution require authorization from Agora (声网) — contact
+  Agora's sales channel before shipping or redistributing it.
+- `mybot_json` is derived from cJSON and retains the MIT license notice.
+
+Verify these terms independently before shipping or redistributing a product. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details.

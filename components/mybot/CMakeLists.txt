@@ -34,7 +34,6 @@ set(sdk_srcs
     src/platform/mybot_platform.c
     src/platform/mybot_wifi.c
     src/rtc/mybot_agora_rtc.c
-    src/rtc/mybot_conversation.c
     src/service/mybot_device_client.c
     src/support/mybot_http_client.c
     src/support/mybot_json.c
