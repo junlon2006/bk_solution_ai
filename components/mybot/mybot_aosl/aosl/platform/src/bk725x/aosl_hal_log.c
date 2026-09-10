@@ -16,7 +16,7 @@ int aosl_hal_printf(const char *format, va_list args)
   }
 
   result = vsnprintf(buffer, AOSL_LOG_BUFFER_SIZE, format, args);
-  printf("%s", buffer);
+  printf("[%u]%s", (unsigned int)rtos_get_time(), buffer);
   psram_free(buffer);
 
   return result < 0 ? -1 : result;

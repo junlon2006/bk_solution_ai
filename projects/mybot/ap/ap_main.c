@@ -26,18 +26,6 @@ extern volatile const char build_version[];
 
 static mybot_config_t s_config;
 
-static mybot_bk7259_conversation_state_t mybot_key_conversation_state(void)
-{
-    switch (mybot_get_state()) {
-    case MYBOT_STATE_READY:
-        return MYBOT_BK7259_CONVERSATION_READY;
-    case MYBOT_STATE_IN_CONVERSATION:
-        return MYBOT_BK7259_CONVERSATION_ACTIVE;
-    default:
-        return MYBOT_BK7259_CONVERSATION_UNAVAILABLE;
-    }
-}
-
 static const char *mybot_state_name(mybot_state_t state)
 {
     switch (state) {
@@ -144,7 +132,6 @@ static int mybot_run(void)
      * one product-lifetime reference so both paths share initialized globals. */
     aosl_ctor();
     aosl_ref_held = true;
-    mybot_bk7259_set_conversation_state_getter(mybot_key_conversation_state);
     mybot_log_state_transition(&last_state, &state_valid);
 
     if (s_config.server_base[0] == '\0') {

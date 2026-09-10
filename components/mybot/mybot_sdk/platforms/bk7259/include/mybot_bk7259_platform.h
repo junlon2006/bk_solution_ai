@@ -17,22 +17,12 @@
 
 #define MYBOT_ASSETS_DIR "mybot/assets"
 
-typedef enum {
-    MYBOT_BK7259_CONVERSATION_UNAVAILABLE = 0,
-    MYBOT_BK7259_CONVERSATION_READY,
-    MYBOT_BK7259_CONVERSATION_ACTIVE,
-} mybot_bk7259_conversation_state_t;
-
-typedef mybot_bk7259_conversation_state_t (*mybot_bk7259_conversation_state_getter_t)(void);
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 int mybot_bk7259_platform_prepare(void);
 int mybot_bk7259_platform_register(void);
-void mybot_bk7259_set_conversation_state_getter(
-    mybot_bk7259_conversation_state_getter_t getter);
 /* Returns 1 when APSTA was required, 0 for an existing connection, or -1. */
 int mybot_bk7259_ensure_network(const char *device_id);
 int mybot_bk7259_provision_wifi(const char *device_id);

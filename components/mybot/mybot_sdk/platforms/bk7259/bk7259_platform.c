@@ -28,11 +28,6 @@ void mybot_bk7259_factory_reset(void) {
     }
 }
 
-void mybot_bk7259_set_conversation_state_getter(
-    mybot_bk7259_conversation_state_getter_t getter) {
-    bk7259_key_set_conversation_state_getter(getter);
-}
-
 int mybot_bk7259_platform_prepare(void) {
     if (s_prepared) {
         return 0;

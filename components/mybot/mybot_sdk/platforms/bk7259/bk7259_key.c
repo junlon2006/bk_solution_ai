@@ -5,6 +5,7 @@
 #include <adc_key_main.h>
 #include <common/bk_err.h>
 #include <components/log.h>
+#include <mybot/mybot.h>
 #include <os/os.h>
 
 #include <stdbool.h>
@@ -126,7 +127,6 @@ typedef struct {
 } key_state_t;
 
 static key_state_t s_key;
-static mybot_bk7259_conversation_state_getter_t s_conversation_state_getter;
 
 static void key_conversation_short_press(void);
 static void key_conversation_long_press(void);
@@ -236,33 +236,22 @@ static bool key_is_attached(void) {
 }
 
 static void key_conversation_short_press(void) {
-    mybot_bk7259_conversation_state_t state;
-
     if (!key_is_attached()) {
         return;
     }
-    state = s_conversation_state_getter
-                ? s_conversation_state_getter()
-                : MYBOT_BK7259_CONVERSATION_UNAVAILABLE;
-    switch (state) {
-    case MYBOT_BK7259_CONVERSATION_READY:
+    switch (mybot_get_state()) {
+    case MYBOT_STATE_READY:
         BK_LOGI(TAG, "conversation key short press: start\r\n");
         emit_key_event(MYBOT_KEY_EVENT_CONVERSATION_START);
         break;
-    case MYBOT_BK7259_CONVERSATION_ACTIVE:
+    case MYBOT_STATE_IN_CONVERSATION:
         BK_LOGI(TAG, "conversation key short press: stop\r\n");
         emit_key_event(MYBOT_KEY_EVENT_CONVERSATION_STOP);
         break;
     default:
+        BK_LOGI(TAG, "conversation key short press ignored\r\n");
         break;
     }
-}
-
-void bk7259_key_set_conversation_state_getter(
-    mybot_bk7259_conversation_state_getter_t getter) {
-    /* The product sets this before key_prepare(); it remains immutable while
-     * the input callback can run. */
-    s_conversation_state_getter = getter;
 }
 
 /* The SDK has to be stopped before Wi-Fi is handed to APSTA, so the callback

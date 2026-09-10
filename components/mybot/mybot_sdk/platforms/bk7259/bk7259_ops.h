@@ -24,8 +24,6 @@ extern const mybot_wifi_ops_t g_mybot_bk7259_wifi_ops;
 
 int bk7259_key_prepare(void);
 void bk7259_key_shutdown(void);
-void bk7259_key_set_conversation_state_getter(
-    mybot_bk7259_conversation_state_getter_t getter);
 int bk7259_lcd_prepare(void);
 void bk7259_lcd_shutdown(void);
 int bk7259_lcd_show_screen(mybot_lcd_screen_t screen);
