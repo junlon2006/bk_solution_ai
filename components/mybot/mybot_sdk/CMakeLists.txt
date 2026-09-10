@@ -136,8 +136,7 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     -fvisibility=hidden
     -Werror=incompatible-pointer-types
 )
-# The bring-up device service is plaintext http://; set MYBOT_ALLOW_INSECURE_HTTP
-# back to 0 after the service moves to TLS.
+# The device service endpoint is https://; plaintext http:// is rejected.
 target_compile_definitions(${COMPONENT_LIB}
     PRIVATE MYBOT_BUILDING_LIBRARY
     PUBLIC
@@ -147,5 +146,5 @@ target_compile_definitions(${COMPONENT_LIB}
         MYBOT_AI_QOS=1
         MYBOT_FAST_SEND_MULTIPLIER=3
         MYBOT_ENABLE_HTTPS=1
-        MYBOT_ALLOW_INSECURE_HTTP=1
+        MYBOT_ALLOW_INSECURE_HTTP=0
 )
