@@ -3,7 +3,7 @@
 
 #include <bk_ef.h>
 #include <api/aosl_thread.h>
-#include <components/log.h>
+#include "bk7259_platform_log.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -99,11 +99,11 @@ static bool load_persisted_volume(int *volume) {
 
     length = bk_get_env_enhance(BK7259_VOLUME_RECORD_KEY, raw, sizeof(raw));
     if (length == 0) {
-        BK_LOGI(TAG, "no persisted volume; using speaker default\r\n");
+        MYBOT_LOGI(TAG, "no persisted volume; using speaker default");
         return false;
     }
     if (length < 0 || length != (int)sizeof(record)) {
-        BK_LOGW(TAG, "ignored persisted volume with invalid length=%d\r\n", length);
+        MYBOT_LOGW(TAG, "ignored persisted volume with invalid length=%d", length);
         return false;
     }
 
@@ -112,12 +112,12 @@ static bool load_persisted_volume(int *volume) {
         record.version != BK7259_VOLUME_RECORD_VERSION ||
         record.record_size != sizeof(record) ||
         record.volume < MYBOT_AUDIO_VOLUME_MIN || record.volume > MYBOT_AUDIO_VOLUME_MAX) {
-        BK_LOGW(TAG, "ignored invalid persisted volume record\r\n");
+        MYBOT_LOGW(TAG, "ignored invalid persisted volume record");
         return false;
     }
 
     *volume = record.volume;
-    BK_LOGI(TAG, "loaded persisted volume=%d\r\n", *volume);
+    MYBOT_LOGI(TAG, "loaded persisted volume=%d", *volume);
     return true;
 }
 
@@ -131,10 +131,10 @@ static int save_volume(int volume) {
 
     EfErrCode result = bk_set_env_enhance(BK7259_VOLUME_RECORD_KEY, &record, sizeof(record));
     if (result != EF_NO_ERR) {
-        BK_LOGW(TAG, "failed to persist volume=%d (err=%d)\r\n", volume, (int)result);
+        MYBOT_LOGW(TAG, "failed to persist volume=%d (err=%d)", volume, (int)result);
         return -1;
     }
-    BK_LOGI(TAG, "persisted volume=%d\r\n", volume);
+    MYBOT_LOGI(TAG, "persisted volume=%d", volume);
     return 0;
 }
 
@@ -152,18 +152,18 @@ static int volume_init(void **out_ctx) {
     bool ready_persisted = false;
 
     if (!out_ctx) {
-        BK_LOGE(TAG, "volume init rejected: invalid output context\r\n");
+        MYBOT_LOGE(TAG, "volume init rejected: invalid output context");
         return -1;
     }
     *out_ctx = NULL;
-    BK_LOGI(TAG, "volume init requested\r\n");
+    MYBOT_LOGI(TAG, "volume init requested");
     if (aosl_static_lock_lock(&s_volume_lock) < 0) {
-        BK_LOGE(TAG, "volume init lock failed\r\n");
+        MYBOT_LOGE(TAG, "volume init lock failed");
         return -1;
     }
 
     if (s_volume.active) {
-        BK_LOGW(TAG, "volume init rejected: already active\r\n");
+        MYBOT_LOGW(TAG, "volume init rejected: already active");
         (void)aosl_static_lock_unlock(&s_volume_lock);
         return -1;
     }
@@ -176,14 +176,14 @@ static int volume_init(void **out_ctx) {
         s_volume.volume = s_volume.persisted_volume;
         gain_db = volume_to_gain_db(s_volume.volume);
         if (bk7259_audio_playback_gain_set(gain_db) < 0) {
-            BK_LOGE(TAG, "volume restore failed: volume=%d gain=%.2f dB\r\n", s_volume.volume,
+            MYBOT_LOGE(TAG, "volume restore failed: volume=%d gain=%.2f dB", s_volume.volume,
                     gain_db);
             (void)aosl_static_lock_unlock(&s_volume_lock);
             return -1;
         }
     } else {
         if (bk7259_audio_playback_gain_get(&gain_db) < 0) {
-            BK_LOGE(TAG, "volume init failed: unable to read speaker gain\r\n");
+            MYBOT_LOGE(TAG, "volume init failed: unable to read speaker gain");
             (void)aosl_static_lock_unlock(&s_volume_lock);
             return -1;
         }
@@ -196,7 +196,7 @@ static int volume_init(void **out_ctx) {
     ready_volume = s_volume.volume;
     ready_persisted = s_volume.persisted_volume_known;
     (void)aosl_static_lock_unlock(&s_volume_lock);
-    BK_LOGI(TAG, "volume ready: level=%d gain=%.2f dB persisted=%s\r\n", ready_volume,
+    MYBOT_LOGI(TAG, "volume ready: level=%d gain=%.2f dB persisted=%s", ready_volume,
             gain_db, ready_persisted ? "yes" : "no");
     return 0;
 }
@@ -205,12 +205,12 @@ static int volume_set(void *opaque, int requested_volume) {
     int result = -1;
 
     if (aosl_static_lock_lock(&s_volume_lock) < 0) {
-        BK_LOGE(TAG, "volume set lock failed\r\n");
+        MYBOT_LOGE(TAG, "volume set lock failed");
         return -1;
     }
     if (!volume_context_is_valid(opaque) || requested_volume < MYBOT_AUDIO_VOLUME_MIN ||
         requested_volume > MYBOT_AUDIO_VOLUME_MAX) {
-        BK_LOGW(TAG, "volume set rejected: level=%d\r\n", requested_volume);
+        MYBOT_LOGW(TAG, "volume set rejected: level=%d", requested_volume);
         (void)aosl_static_lock_unlock(&s_volume_lock);
         return -1;
     }
@@ -229,9 +229,9 @@ static int volume_set(void *opaque, int requested_volume) {
             }
         }
         result = 0;
-        BK_LOGI(TAG, "volume set: level=%d gain=%.2f dB\r\n", requested_volume, gain_db);
+        MYBOT_LOGI(TAG, "volume set: level=%d gain=%.2f dB", requested_volume, gain_db);
     } else {
-        BK_LOGE(TAG, "volume hardware update failed: level=%d gain=%.2f dB\r\n",
+        MYBOT_LOGE(TAG, "volume hardware update failed: level=%d gain=%.2f dB",
                 requested_volume, gain_db);
     }
 
@@ -243,12 +243,12 @@ static int volume_get(void *opaque, int *current_volume) {
     float gain_db;
 
     if (aosl_static_lock_lock(&s_volume_lock) < 0) {
-        BK_LOGE(TAG, "volume get lock failed\r\n");
+        MYBOT_LOGE(TAG, "volume get lock failed");
         return -1;
     }
     if (!volume_context_is_valid(opaque) || !current_volume ||
         bk7259_audio_playback_gain_get(&gain_db) < 0) {
-        BK_LOGW(TAG, "volume get unavailable\r\n");
+        MYBOT_LOGW(TAG, "volume get unavailable");
         (void)aosl_static_lock_unlock(&s_volume_lock);
         return -1;
     }
@@ -258,13 +258,13 @@ static int volume_get(void *opaque, int *current_volume) {
 }
 
 static void volume_destroy(void *opaque) {
-    BK_LOGI(TAG, "volume destroy requested\r\n");
+    MYBOT_LOGI(TAG, "volume destroy requested");
     if (aosl_static_lock_lock(&s_volume_lock) < 0) {
-        BK_LOGE(TAG, "volume destroy lock failed\r\n");
+        MYBOT_LOGE(TAG, "volume destroy lock failed");
         return;
     }
     if (!volume_context_is_valid(opaque)) {
-        BK_LOGW(TAG, "volume destroy ignored: invalid context\r\n");
+        MYBOT_LOGW(TAG, "volume destroy ignored: invalid context");
         (void)aosl_static_lock_unlock(&s_volume_lock);
         return;
     }
@@ -278,7 +278,7 @@ static void volume_destroy(void *opaque) {
     }
     s_volume.active = false;
     (void)aosl_static_lock_unlock(&s_volume_lock);
-    BK_LOGI(TAG, "volume destroyed\r\n");
+    MYBOT_LOGI(TAG, "volume destroyed");
 }
 
 const mybot_audio_volume_ops_t g_mybot_bk7259_volume_ops = {

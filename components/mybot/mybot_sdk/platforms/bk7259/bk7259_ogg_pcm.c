@@ -4,7 +4,7 @@
 #include "sdkconfig.h"
 
 #include <common/bk_err.h>
-#include <components/log.h>
+#include "bk7259_platform_log.h"
 #include <os/mem.h>
 
 #include <modules/ogg.h>
@@ -16,9 +16,6 @@
 #include <string.h>
 
 #define TAG "mybot_ogg"
-#define MYBOT_LOGI BK_LOGI
-#define MYBOT_LOGW BK_LOGW
-#define MYBOT_LOGE BK_LOGE
 
 #define MYBOT_OGG_MAX_FILE_BYTES (256U * 1024U)
 #define MYBOT_OGG_MAX_PCM_FRAMES (512U * 1024U / sizeof(int16_t))

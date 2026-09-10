@@ -2,7 +2,7 @@
 #include "bk7259_wifi_internal.h"
 
 #include <common/bk_err.h>
-#include <components/log.h>
+#include "bk7259_platform_log.h"
 #include <components/netif.h>
 #include <lwip/inet.h>
 #include <lwip/sockets.h>
@@ -133,7 +133,7 @@ static int start_softap(portal_context_t *ctx) {
     (void)snprintf(ip4.gateway, sizeof(ip4.gateway), "%s", "192.168.4.1");
     (void)snprintf(ip4.dns, sizeof(ip4.dns), "%s", "192.168.4.1");
     if (bk_netif_set_ip4_config(NETIF_IF_AP, &ip4) != BK_OK) {
-        BK_LOGE(TAG, "failed to configure SoftAP IPv4\r\n");
+        MYBOT_LOGE(TAG, "failed to configure SoftAP IPv4");
         return -1;
     }
 
@@ -144,13 +144,13 @@ static int start_softap(portal_context_t *ctx) {
     config.max_con = 2;
     config.disable_dns_server = 0;
     if (bk_wifi_ap_set_config(&config) != BK_OK || bk_wifi_ap_start() != BK_OK) {
-        BK_LOGE(TAG, "failed to configure or start SoftAP\r\n");
+        MYBOT_LOGE(TAG, "failed to configure or start SoftAP");
         (void)bk_wifi_ap_stop();
         return -1;
     }
 
     ctx->ap_started = true;
-    BK_LOGI(TAG, "SoftAP started\r\n");
+    MYBOT_LOGI(TAG, "SoftAP started");
     return 0;
 }
 
@@ -159,11 +159,11 @@ static int stop_softap(portal_context_t *ctx) {
         return 0;
     }
     if (bk_wifi_ap_stop() != BK_OK) {
-        BK_LOGE(TAG, "failed to stop SoftAP\r\n");
+        MYBOT_LOGE(TAG, "failed to stop SoftAP");
         return -1;
     }
     ctx->ap_started = false;
-    BK_LOGI(TAG, "SoftAP stopped\r\n");
+    MYBOT_LOGI(TAG, "SoftAP stopped");
     return 0;
 }
 
@@ -440,11 +440,11 @@ static char *build_scan_json(const wifi_scan_ap_info_t *results, size_t result_c
 }
 
 static int handle_scan(int fd) {
-    BK_LOGI(TAG, "Wi-Fi scan requested\r\n");
+    MYBOT_LOGI(TAG, "Wi-Fi scan requested");
     wifi_scan_ap_info_t *results =
         os_zalloc(PORTAL_MAX_SCAN_RESULTS * sizeof(*results));
     if (!results) {
-        BK_LOGE(TAG, "Wi-Fi scan result allocation failed\r\n");
+        MYBOT_LOGE(TAG, "Wi-Fi scan result allocation failed");
         return send_http_response(fd, "500 Internal Server Error", "application/json",
                                   NULL, "{\"aps\":[]}", sizeof("{\"aps\":[]}") - 1U);
     }
@@ -458,7 +458,7 @@ static int handle_scan(int fd) {
     char *json = scan_result == 0 ? build_scan_json(results, result_count) : NULL;
     os_free(results);
     if (!json) {
-        BK_LOGW(TAG, "Wi-Fi scan failed: result=%d count=%u\r\n", scan_result,
+        MYBOT_LOGW(TAG, "Wi-Fi scan failed: result=%d count=%u", scan_result,
                 (unsigned)result_count);
         return send_http_response(fd, scan_result == 0 ? "500 Internal Server Error"
                                                        : "503 Service Unavailable",
@@ -469,7 +469,7 @@ static int handle_scan(int fd) {
     int result =
         send_http_response(fd, "200 OK", "application/json", NULL, json, strlen(json));
     cJSON_free(json);
-    BK_LOGI(TAG, "Wi-Fi scan complete: aps=%u response=%d\r\n",
+    MYBOT_LOGI(TAG, "Wi-Fi scan complete: aps=%u response=%d",
             (unsigned)result_count, result);
     return result;
 }
@@ -576,16 +576,16 @@ static int handle_submit(int fd, const portal_http_request_t *request) {
 
     if (!request->has_content_length || !request->content_type_json ||
         parse_submit_json(request->body, request->body_length, ssid, password) < 0) {
-        BK_LOGW(TAG, "Wi-Fi submit rejected: invalid request\r\n");
+        MYBOT_LOGW(TAG, "Wi-Fi submit rejected: invalid request");
         result = send_json_literal(fd, "400 Bad Request",
                                    "{\"success\":false,\"error\":\"Invalid request\"}");
         goto done;
     }
 
-    BK_LOGI(TAG, "testing submitted Wi-Fi network\r\n");
+    MYBOT_LOGI(TAG, "testing submitted Wi-Fi network");
     if (bk7259_wifi_manager_connect_candidate(ssid, password,
                                                PORTAL_CONNECT_TIMEOUT_MS) < 0) {
-        BK_LOGW(TAG, "Wi-Fi submit rejected: connection failed\r\n");
+        MYBOT_LOGW(TAG, "Wi-Fi submit rejected: connection failed");
         result = send_json_literal(
             fd, "409 Conflict",
             "{\"success\":false,\"error\":\"Unable to connect\"}");
@@ -593,7 +593,7 @@ static int handle_submit(int fd, const portal_http_request_t *request) {
     }
     if (bk7259_wifi_manager_save_credentials(ssid, password) < 0) {
         (void)bk7259_wifi_manager_disconnect();
-        BK_LOGE(TAG, "Wi-Fi submit failed: credential save failed\r\n");
+        MYBOT_LOGE(TAG, "Wi-Fi submit failed: credential save failed");
         result = send_json_literal(
             fd, "500 Internal Server Error",
             "{\"success\":false,\"error\":\"Unable to save credentials\"}");
@@ -604,7 +604,7 @@ static int handle_submit(int fd, const portal_http_request_t *request) {
      * phone can leave our SoftAP before it receives this best-effort reply. */
     (void)send_json_literal(fd, "200 OK", "{\"success\":true}");
     result = 1;
-    BK_LOGI(TAG, "Wi-Fi submit accepted\r\n");
+    MYBOT_LOGI(TAG, "Wi-Fi submit accepted");
 
 done:
     secure_zero(password, sizeof(password));
@@ -678,7 +678,7 @@ static int configure_client_socket(int fd) {
 
 int bk7259_wifi_portal_run(const char *device_id) {
     if (!device_id || device_id[0] == '\0') {
-        BK_LOGE(TAG, "portal start rejected: missing device id\r\n");
+        MYBOT_LOGE(TAG, "portal start rejected: missing device id");
         return -1;
     }
 
@@ -691,10 +691,10 @@ int bk7259_wifi_portal_run(const char *device_id) {
     int result = -1;
     int listen_fd = create_http_server();
     if (listen_fd < 0) {
-        BK_LOGE(TAG, "failed to start HTTP server, errno=%d\r\n", errno);
+        MYBOT_LOGE(TAG, "failed to start HTTP server, errno=%d", errno);
         goto done;
     }
-    BK_LOGI(TAG, "APSTA portal ready: ssid=%s url=http://192.168.4.1\r\n",
+    MYBOT_LOGI(TAG, "APSTA portal ready: ssid=%s url=http://192.168.4.1",
             ctx.ap_ssid);
 
     for (;;) {
@@ -703,7 +703,7 @@ int bk7259_wifi_portal_run(const char *device_id) {
             if (errno == EINTR) {
                 continue;
             }
-            BK_LOGE(TAG, "HTTP server select failed, errno=%d\r\n", errno);
+            MYBOT_LOGE(TAG, "HTTP server select failed, errno=%d", errno);
             break;
         }
         if (ready == 0) {
@@ -719,7 +719,7 @@ int bk7259_wifi_portal_run(const char *device_id) {
                 errno == ECONNABORTED) {
                 continue;
             }
-            BK_LOGE(TAG, "HTTP server accept failed, errno=%d\r\n", errno);
+            MYBOT_LOGE(TAG, "HTTP server accept failed, errno=%d", errno);
             break;
         }
 
@@ -742,6 +742,6 @@ done:
     if (stop_softap(&ctx) < 0) {
         result = -1;
     }
-    BK_LOGI(TAG, "APSTA portal stopped: result=%d\r\n", result);
+    MYBOT_LOGI(TAG, "APSTA portal stopped: result=%d", result);
     return result;
 }

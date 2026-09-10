@@ -2,7 +2,7 @@
 #include "bk7259_ops.h"
 
 #include <api/aosl_mm.h>
-#include <components/log.h>
+#include "bk7259_platform_log.h"
 #include <easyflash.h>
 
 #include <stdint.h>
@@ -28,15 +28,15 @@ static int make_key(const char *key, char output[KV_KEY_CAPACITY]) {
 
 static int kv_init(void **ctx) {
     if (!ctx) {
-        BK_LOGE(TAG, "KV store initialization rejected: invalid context\r\n");
+        MYBOT_LOGE(TAG, "KV store initialization rejected: invalid context");
         return -1;
     }
     if (easyflash_init() != EF_NO_ERR) {
-        BK_LOGE(TAG, "EasyFlash initialization failed\r\n");
+        MYBOT_LOGE(TAG, "EasyFlash initialization failed");
         return -1;
     }
     *ctx = (void *)(uintptr_t)1U;
-    BK_LOGI(TAG, "KV store ready\r\n");
+    MYBOT_LOGI(TAG, "KV store ready");
     return 0;
 }
 
@@ -106,7 +106,7 @@ static int kv_set(void *ctx, const char *key, const void *value, size_t len) {
     EfErrCode result = ef_set_env_blob(namespaced, stored, stored_len);
     aosl_free(stored);
     if (result != EF_NO_ERR) {
-        BK_LOGE(TAG, "KV write failed (err=%d)\r\n", (int)result);
+        MYBOT_LOGE(TAG, "KV write failed (err=%d)", (int)result);
     }
     return result == EF_NO_ERR ? 0 : -1;
 }
@@ -126,14 +126,14 @@ static int kv_erase(void *ctx, const char *key) {
     }
     EfErrCode result = ef_del_env(namespaced);
     if (result != EF_NO_ERR) {
-        BK_LOGE(TAG, "KV erase failed (err=%d)\r\n", (int)result);
+        MYBOT_LOGE(TAG, "KV erase failed (err=%d)", (int)result);
     }
     return result == EF_NO_ERR ? 0 : -1;
 }
 
 static void kv_destroy(void *ctx) {
     if (ctx) {
-        BK_LOGI(TAG, "KV store destroyed\r\n");
+        MYBOT_LOGI(TAG, "KV store destroyed");
     }
 }
 

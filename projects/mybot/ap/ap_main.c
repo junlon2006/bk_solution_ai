@@ -1,6 +1,5 @@
 #include "bk_private/bk_init.h"
 
-#include <components/log.h>
 #include <components/bk_uid.h>
 #include <media_service.h>
 #include <mbedtls/md5.h>
@@ -11,6 +10,7 @@
 #include <mybot/mybot_version.h>
 
 #include <mybot_bk7259_platform.h>
+#include <bk7259_platform_log.h>
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -61,14 +61,14 @@ static void mybot_log_state_transition(mybot_state_t *last_state, bool *valid)
     }
     current = mybot_get_state();
     if (!*valid) {
-        BK_LOGI(TAG, "runtime state=%s(%d)\r\n", mybot_state_name(current),
+        MYBOT_LOGI(TAG, "runtime state=%s(%d)", mybot_state_name(current),
                 (int)current);
         *last_state = current;
         *valid = true;
         return;
     }
     if (current != *last_state) {
-        BK_LOGI(TAG, "runtime state transition: %s(%d) -> %s(%d)\r\n",
+        MYBOT_LOGI(TAG, "runtime state transition: %s(%d) -> %s(%d)",
                 mybot_state_name(*last_state), (int)*last_state,
                 mybot_state_name(current), (int)current);
         *last_state = current;
@@ -101,11 +101,11 @@ static int mybot_build_config(void)
         /* The UID is the only source of the device identity: nothing here
          * stands in for it, and a device without an identity can be neither
          * provisioned nor started. */
-        BK_LOGE(TAG, "device UID unavailable; no device identity\r\n");
+        MYBOT_LOGE(TAG, "device UID unavailable; no device identity");
         return -1;
     }
     if (mbedtls_md5(uid, sizeof(uid), digest) != 0) {
-        BK_LOGE(TAG, "failed to hash the device UID\r\n");
+        MYBOT_LOGE(TAG, "failed to hash the device UID");
         return -1;
     }
     for (size_t i = 0; i < sizeof(digest); ++i) {
@@ -123,7 +123,7 @@ static int mybot_run(void)
     bool state_valid = false;
 
     if (mybot_build_config() < 0) {
-        BK_LOGE(TAG, "could not build the device configuration\r\n");
+        MYBOT_LOGE(TAG, "could not build the device configuration");
         return -1;
     }
 
@@ -132,23 +132,26 @@ static int mybot_run(void)
      * one product-lifetime reference so both paths share initialized globals. */
     aosl_ctor();
     aosl_ref_held = true;
+    /* The platform log abstraction routes through AOSL; raise the gate from
+     * its ERROR default so MYBOT_LOGI/MYBOT_LOGW lines are emitted. */
+    aosl_set_log_level(AOSL_LOG_NOTICE);
     mybot_log_state_transition(&last_state, &state_valid);
 
     if (s_config.server_base[0] == '\0') {
-        BK_LOGW(TAG,
-                "MYBOT_SERVER_BASE is empty; runtime startup will fail\r\n");
+        MYBOT_LOGW(TAG,
+                "MYBOT_SERVER_BASE is empty; runtime startup will fail");
     }
-    BK_LOGI(TAG, "device=%s server=%s\r\n", s_config.device_id,
+    MYBOT_LOGI(TAG, "device=%s server=%s", s_config.device_id,
             s_config.server_base);
 
     if (mybot_bk7259_platform_prepare() < 0) {
-        BK_LOGE(TAG, "platform preparation failed\r\n");
+        MYBOT_LOGE(TAG, "platform preparation failed");
         aosl_dtor();
         return -1;
     }
 
     if (mybot_bk7259_platform_register() < 0) {
-        BK_LOGE(TAG, "platform registration failed\r\n");
+        MYBOT_LOGE(TAG, "platform registration failed");
         mybot_bk7259_platform_shutdown();
         aosl_dtor();
         return -1;
@@ -159,35 +162,35 @@ static int mybot_run(void)
         mybot_log_state_transition(&last_state, &state_valid);
         /* The SDK is not running here, so the erase is safe to perform. */
         if (mybot_bk7259_wait_reset_request(0)) {
-            BK_LOGW(TAG, "factory reset requested while the SDK is stopped\r\n");
+            MYBOT_LOGW(TAG, "factory reset requested while the SDK is stopped");
             mybot_bk7259_factory_reset();
         }
         int network_result = mybot_bk7259_ensure_network(s_config.device_id);
         mybot_log_state_transition(&last_state, &state_valid);
         if (network_result < 0) {
-            BK_LOGE(TAG, "network setup failed\r\n");
+            MYBOT_LOGE(TAG, "network setup failed");
             break;
         }
         if (network_result > 0) {
             (void)mybot_bk7259_wait_provision_request(0);
         } else if (mybot_bk7259_wait_provision_request(0)) {
             if (mybot_bk7259_provision_wifi(s_config.device_id) < 0) {
-                BK_LOGE(TAG, "APSTA provisioning failed\r\n");
+                MYBOT_LOGE(TAG, "APSTA provisioning failed");
                 break;
             }
             (void)mybot_bk7259_wait_provision_request(0);
             continue;
         }
 
-        BK_LOGI(TAG, "starting SDK\r\n");
+        MYBOT_LOGI(TAG, "starting SDK");
         if (mybot_start(&s_config) < 0) {
             mybot_log_state_transition(&last_state, &state_valid);
-            BK_LOGE(TAG, "SDK startup failed\r\n");
+            MYBOT_LOGE(TAG, "SDK startup failed");
             mybot_stop();
             mybot_log_state_transition(&last_state, &state_valid);
             break;
         }
-        BK_LOGI(TAG, "SDK started\r\n");
+        MYBOT_LOGI(TAG, "SDK started");
         mybot_log_state_transition(&last_state, &state_valid);
 
         bool provision_requested = false;
@@ -204,7 +207,7 @@ static int mybot_run(void)
                 break;
             }
             if (mybot_get_state() == MYBOT_STATE_FAILED) {
-                BK_LOGE(TAG, "SDK entered the failed state\r\n");
+                MYBOT_LOGE(TAG, "SDK entered the failed state");
                 sdk_failed = true;
                 break;
             }
@@ -217,11 +220,11 @@ static int mybot_run(void)
             sdk_failed = sdk_failed || mybot_get_state() == MYBOT_STATE_FAILED;
         }
 
-        BK_LOGI(TAG, "stopping SDK, reason=%s\r\n",
+        MYBOT_LOGI(TAG, "stopping SDK, reason=%s",
                 reset_requested ? "reset"
                                 : (provision_requested ? "provision" : "sdk_exit"));
         mybot_state_t stop_state = mybot_get_state();
-        BK_LOGI(TAG, "SDK stop requested from state=%s(%d)\r\n",
+        MYBOT_LOGI(TAG, "SDK stop requested from state=%s(%d)",
                 mybot_state_name(stop_state), (int)stop_state);
         mybot_stop();
         mybot_log_state_transition(&last_state, &state_valid);
@@ -235,12 +238,12 @@ static int mybot_run(void)
         /* The SDK has released its resources, so the erase takes precedence over
          * the STOPPED check and over provisioning; it never returns. */
         if (reset_requested) {
-            BK_LOGW(TAG, "performing factory reset\r\n");
+            MYBOT_LOGW(TAG, "performing factory reset");
             mybot_bk7259_factory_reset();
         }
 
         if (mybot_is_running() || mybot_get_state() != MYBOT_STATE_STOPPED) {
-            BK_LOGE(TAG, "SDK shutdown did not reach STOPPED\r\n");
+            MYBOT_LOGE(TAG, "SDK shutdown did not reach STOPPED");
             break;
         }
         if (!provision_requested) {
@@ -248,9 +251,9 @@ static int mybot_run(void)
             break;
         }
 
-        BK_LOGI(TAG, "starting APSTA provisioning\r\n");
+        MYBOT_LOGI(TAG, "starting APSTA provisioning");
         if (mybot_bk7259_provision_wifi(s_config.device_id) < 0) {
-            BK_LOGE(TAG, "APSTA provisioning failed\r\n");
+            MYBOT_LOGE(TAG, "APSTA provisioning failed");
             break;
         }
         (void)mybot_bk7259_wait_provision_request(0);
@@ -269,20 +272,20 @@ static void mybot_app_task(beken_thread_arg_t arg)
 {
     (void)arg;
     int result = mybot_run();
-    BK_LOGI(TAG, "MyBot task exited, result=%d\r\n", result);
+    MYBOT_LOGI(TAG, "MyBot task exited, result=%d", result);
     rtos_delete_thread(NULL);
 }
 
 int main(void)
 {
     if (bk_init() != 0) {
-        BK_LOGE(TAG, "BK component initialization failed\r\n");
+        MYBOT_LOGE(TAG, "BK component initialization failed");
         return -1;
     }
 
     /* Same banner as the BK725x controller, printed once the SDK is up so the
      * log is live. */
-    BK_LOGI(TAG, "mybot version: %s, build time: %s\r\n", MYBOT_VERSION_STRING,
+    MYBOT_LOGI(TAG, "mybot version: %s, build time: %s", MYBOT_VERSION_STRING,
             (const char *)build_version);
 
     /*
@@ -292,7 +295,7 @@ int main(void)
      * preparation starts.
      */
     if (media_service_init() != 0) {
-        BK_LOGE(TAG, "media service initialization failed\r\n");
+        MYBOT_LOGE(TAG, "media service initialization failed");
         return -1;
     }
 
@@ -305,7 +308,7 @@ int main(void)
     if (rtos_create_psram_thread(NULL, BEKEN_DEFAULT_WORKER_PRIORITY,
                                  "mybot_app", mybot_app_task,
                                  MYBOT_APP_TASK_STACK_SIZE, NULL) != BK_OK) {
-        BK_LOGE(TAG, "failed to create MyBot task\r\n");
+        MYBOT_LOGE(TAG, "failed to create MyBot task");
         return -1;
     }
 

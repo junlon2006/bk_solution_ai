@@ -5,7 +5,7 @@
 #include "bk7259_ogg_pcm.h"
 #include <mybot_bk7259_platform.h>
 
-#include <components/log.h>
+#include "bk7259_platform_log.h"
 #include <os/mem.h>
 #include <api/aosl_thread.h>
 
@@ -94,11 +94,11 @@ static int announce_init(void **out_ctx) {
     *out_ctx = NULL;
     context = psram_zalloc(sizeof(*context));
     if (!context) {
-        BK_LOGE(TAG, "announcement context allocation failed\n");
+        MYBOT_LOGE(TAG, "announcement context allocation failed");
         return -1;
     }
     *out_ctx = context;
-    BK_LOGI(TAG, "embedded prompts ready: %s/%s\n", MYBOT_ASSETS_DIR,
+    MYBOT_LOGI(TAG, "embedded prompts ready: %s/%s", MYBOT_ASSETS_DIR,
             MYBOT_LANGUAGE_TAG);
     return 0;
 }
@@ -121,20 +121,20 @@ static void *announce_open(void *opaque, mybot_announce_sound_t sound) {
                            MYBOT_LANGUAGE_TAG, file_name);
     if (path_length < 0 || (size_t)path_length >= sizeof(path) ||
         bk7259_asset_find(path, &asset) < 0) {
-        BK_LOGW(TAG, "announcement asset unavailable: %s\n", file_name);
+        MYBOT_LOGW(TAG, "announcement asset unavailable: %s", file_name);
         return NULL;
     }
     if (bk7259_ogg_pcm_load_memory(path, asset.data, asset.size, ANNOUNCE_RATE_HZ,
                                    &decoded) < 0 || decoded.frames <= 0 ||
         (size_t)decoded.frames > ANNOUNCE_MAX_FRAMES) {
-        BK_LOGW(TAG, "announcement decode failed or out of range: %s\n", path);
+        MYBOT_LOGW(TAG, "announcement decode failed or out of range: %s", path);
         bk7259_ogg_pcm_free(&decoded);
         return NULL;
     }
 
     handle = psram_zalloc(sizeof(*handle));
     if (!handle) {
-        BK_LOGE(TAG, "announcement handle allocation failed: %s\n", path);
+        MYBOT_LOGE(TAG, "announcement handle allocation failed: %s", path);
         bk7259_ogg_pcm_free(&decoded);
         return NULL;
     }
@@ -145,7 +145,7 @@ static void *announce_open(void *opaque, mybot_announce_sound_t sound) {
         if (memory_locked) {
             (void)aosl_static_lock_unlock(&s_announce_memory_lock);
         }
-        BK_LOGW(TAG, "announcement PCM budget exceeded: %s\n", path);
+        MYBOT_LOGW(TAG, "announcement PCM budget exceeded: %s", path);
         psram_free(handle);
         bk7259_ogg_pcm_free(&decoded);
         return NULL;

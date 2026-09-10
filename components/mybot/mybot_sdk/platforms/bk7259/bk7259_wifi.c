@@ -4,7 +4,7 @@
 
 #include <common/bk_err.h>
 #include <components/event.h>
-#include <components/log.h>
+#include "bk7259_platform_log.h"
 #include <components/netif_types.h>
 #include <easyflash.h>
 #include <modules/wifi.h>
@@ -79,11 +79,11 @@ static const char *wifi_event_name(mybot_wifi_event_t event) {
 static int run_provisioning_portal(const char *device_id) {
     (void)bk7259_lcd_show_screen(MYBOT_LCD_SCREEN_WIFI_PROVISIONING);
     if (bk7259_prompt_play_provisioning() < 0) {
-        BK_LOGW(TAG, "provisioning prompt unavailable; continuing without audio\r\n");
+        MYBOT_LOGW(TAG, "provisioning prompt unavailable; continuing without audio");
     }
     int result = bk7259_wifi_portal_run(device_id);
     if (result == 0 && bk7259_prompt_play_success() < 0) {
-        BK_LOGW(TAG, "provisioning success prompt unavailable\r\n");
+        MYBOT_LOGW(TAG, "provisioning success prompt unavailable");
     }
     (void)bk7259_lcd_show_screen(result == 0 ? MYBOT_LCD_SCREEN_STARTING_SERVICES
                                              : MYBOT_LCD_SCREEN_FAILED);
@@ -160,14 +160,14 @@ static void emit_sdk_transition_locked(wifi_manager_t *manager,
 
     manager->last_sdk_event = event;
     manager->last_sdk_event_valid = true;
-    BK_LOGI(TAG, "SDK connectivity event: %s\r\n", wifi_event_name(event));
+    MYBOT_LOGI(TAG, "SDK connectivity event: %s", wifi_event_name(event));
     manager->emit(event, manager->emit_user_data);
 }
 
 static void set_sta_connected_locked(wifi_manager_t *manager) {
     if (!manager->sta_has_ip) {
         manager->sta_has_ip = true;
-        BK_LOGI(TAG, "STA connectivity -> connected (IPv4 ready)\r\n");
+        MYBOT_LOGI(TAG, "STA connectivity -> connected (IPv4 ready)");
         emit_sdk_transition_locked(manager, MYBOT_WIFI_EVENT_STA_CONNECTED);
     }
 }
@@ -176,7 +176,7 @@ static void set_sta_disconnected_locked(wifi_manager_t *manager) {
     bool was_connected = manager->sta_has_ip;
     manager->sta_has_ip = false;
     if (was_connected) {
-        BK_LOGI(TAG, "STA connectivity -> disconnected\r\n");
+        MYBOT_LOGI(TAG, "STA connectivity -> disconnected");
         emit_sdk_transition_locked(manager, MYBOT_WIFI_EVENT_STA_DISCONNECTED);
     }
 }
@@ -301,11 +301,11 @@ static int wait_for_ipv4(wifi_manager_t *manager, const char *ssid,
         (void)rtos_unlock_mutex(&manager->lock);
         uint32_t remaining_ms = remaining_time_ms(start_ms, timeout_ms);
         if (!valid) {
-            BK_LOGW(TAG, "STA IPv4 wait aborted by a network state change\r\n");
+            MYBOT_LOGW(TAG, "STA IPv4 wait aborted by a network state change");
             return -1;
         }
         if (remaining_ms == 0) {
-            BK_LOGW(TAG, "STA IPv4 acquisition timed out\r\n");
+            MYBOT_LOGW(TAG, "STA IPv4 acquisition timed out");
             return -1;
         }
         (void)rtos_get_semaphore(&manager->event,
@@ -328,12 +328,12 @@ static int stop_sta(wifi_manager_t *manager) {
     (void)rtos_unlock_mutex(&manager->lock);
 
     if (was_started) {
-        BK_LOGI(TAG, "stopping STA\r\n");
+        MYBOT_LOGI(TAG, "stopping STA");
         if (bk_wifi_sta_stop() != BK_OK) {
-            BK_LOGE(TAG, "failed to stop STA\r\n");
+            MYBOT_LOGE(TAG, "failed to stop STA");
             return -1;
         }
-        BK_LOGI(TAG, "STA stopped\r\n");
+        MYBOT_LOGI(TAG, "STA stopped");
     }
     return 0;
 }
@@ -370,7 +370,7 @@ static int start_sta(wifi_manager_t *manager, const char *ssid,
     manager->sta_has_ip = false;
     (void)rtos_unlock_mutex(&manager->lock);
 
-    BK_LOGI(TAG, "starting STA\r\n");
+    MYBOT_LOGI(TAG, "starting STA");
     bk_err_t result = bk_wifi_sta_set_config(&config);
     if (result == BK_OK) {
         result = bk_wifi_sta_start();
@@ -399,10 +399,10 @@ static int start_sta(wifi_manager_t *manager, const char *ssid,
         if (driver_started) {
             (void)bk_wifi_sta_stop();
         }
-        BK_LOGE(TAG, "failed to start STA\r\n");
+        MYBOT_LOGE(TAG, "failed to start STA");
         return -1;
     }
-    BK_LOGI(TAG, "STA driver started; waiting for IPv4\r\n");
+    MYBOT_LOGI(TAG, "STA driver started; waiting for IPv4");
     return 0;
 }
 
@@ -433,9 +433,9 @@ int bk7259_wifi_manager_connect_candidate(const char *ssid, const char *password
     result = wait_for_ipv4(manager, ssid, generation, timeout_ms);
     if (result < 0) {
         (void)stop_sta(manager);
-        BK_LOGW(TAG, "candidate STA connection failed\r\n");
+        MYBOT_LOGW(TAG, "candidate STA connection failed");
     } else {
-        BK_LOGI(TAG, "candidate STA connection succeeded\r\n");
+        MYBOT_LOGI(TAG, "candidate STA connection succeeded");
     }
 
 done:
@@ -476,9 +476,9 @@ int bk7259_wifi_manager_save_credentials(const char *ssid, const char *password)
     EfErrCode result = ef_set_env_blob(WIFI_CREDENTIAL_KEY, &record, sizeof(record));
     secure_zero(&record, sizeof(record));
     if (result == EF_NO_ERR) {
-        BK_LOGI(TAG, "Wi-Fi credentials saved\r\n");
+        MYBOT_LOGI(TAG, "Wi-Fi credentials saved");
     } else {
-        BK_LOGW(TAG, "failed to save Wi-Fi credentials\r\n");
+        MYBOT_LOGW(TAG, "failed to save Wi-Fi credentials");
     }
     return result == EF_NO_ERR ? 0 : -1;
 }
@@ -639,7 +639,7 @@ int bk7259_wifi_prepare(void) {
     }
     manager->prepared = true;
     (void)rtos_unlock_mutex(&manager->lock);
-    BK_LOGI(TAG, "Wi-Fi manager ready\r\n");
+    MYBOT_LOGI(TAG, "Wi-Fi manager ready");
     return 0;
 
 fail:
@@ -665,7 +665,7 @@ fail:
         (void)rtos_deinit_mutex(&manager->lock);
     }
     *manager = (wifi_manager_t){0};
-    BK_LOGE(TAG, "Wi-Fi manager initialization failed\r\n");
+    MYBOT_LOGE(TAG, "Wi-Fi manager initialization failed");
     return -1;
 }
 
@@ -714,7 +714,7 @@ void bk7259_wifi_shutdown(void) {
                                        wifi_event_callback) && detached;
     }
     if (!detached) {
-        BK_LOGE(TAG, "failed to detach Wi-Fi event callbacks\r\n");
+        MYBOT_LOGE(TAG, "failed to detach Wi-Fi event callbacks");
         (void)rtos_unlock_mutex(&manager->operation_lock);
         return;
     }
@@ -724,7 +724,7 @@ void bk7259_wifi_shutdown(void) {
     (void)rtos_deinit_mutex(&manager->operation_lock);
     (void)rtos_deinit_mutex(&manager->lock);
     *manager = (wifi_manager_t){0};
-    BK_LOGI(TAG, "Wi-Fi manager stopped\r\n");
+    MYBOT_LOGI(TAG, "Wi-Fi manager stopped");
 }
 
 static bool manager_has_ipv4_for(const char *ssid) {
@@ -751,11 +751,11 @@ int mybot_bk7259_ensure_network(const char *device_id) {
     wifi_credential_record_t record;
     int loaded = load_credentials(&record);
     if (loaded == 0) {
-        BK_LOGI(TAG, "connecting saved STA\r\n");
+        MYBOT_LOGI(TAG, "connecting saved STA");
         if (manager_has_ipv4_for(record.ssid)) {
             secure_zero(&record, sizeof(record));
             (void)bk7259_lcd_show_screen(MYBOT_LCD_SCREEN_STARTING_SERVICES);
-            BK_LOGI(TAG, "saved STA is already connected\r\n");
+            MYBOT_LOGI(TAG, "saved STA is already connected");
             return 0;
         }
         (void)bk7259_lcd_show_screen(MYBOT_LCD_SCREEN_WIFI_PROVISIONING);
@@ -764,14 +764,14 @@ int mybot_bk7259_ensure_network(const char *device_id) {
         secure_zero(&record, sizeof(record));
         if (result == 0) {
             (void)bk7259_lcd_show_screen(MYBOT_LCD_SCREEN_STARTING_SERVICES);
-            BK_LOGI(TAG, "saved STA connected\r\n");
+            MYBOT_LOGI(TAG, "saved STA connected");
             return 0;
         }
-        BK_LOGW(TAG, "saved Wi-Fi connection failed, starting APSTA\r\n");
+        MYBOT_LOGW(TAG, "saved Wi-Fi connection failed, starting APSTA");
     } else if (loaded < 0) {
-        BK_LOGW(TAG, "saved Wi-Fi credentials are invalid, starting APSTA\r\n");
+        MYBOT_LOGW(TAG, "saved Wi-Fi credentials are invalid, starting APSTA");
     } else {
-        BK_LOGI(TAG, "no saved Wi-Fi credentials, starting APSTA\r\n");
+        MYBOT_LOGI(TAG, "no saved Wi-Fi credentials, starting APSTA");
     }
     secure_zero(&record, sizeof(record));
     return run_provisioning_portal(device_id) == 0 ? 1 : -1;
@@ -781,17 +781,17 @@ int mybot_bk7259_provision_wifi(const char *device_id) {
     if (!device_id || !device_id[0]) {
         return -1;
     }
-    BK_LOGI(TAG, "starting requested APSTA provisioning\r\n");
+    MYBOT_LOGI(TAG, "starting requested APSTA provisioning");
     int result = bk7259_wifi_manager_disconnect();
     if (result != 0) {
-        BK_LOGE(TAG, "failed to prepare STA for APSTA provisioning\r\n");
+        MYBOT_LOGE(TAG, "failed to prepare STA for APSTA provisioning");
         return -1;
     }
     result = run_provisioning_portal(device_id);
     if (result < 0) {
-        BK_LOGW(TAG, "APSTA provisioning failed\r\n");
+        MYBOT_LOGW(TAG, "APSTA provisioning failed");
     } else {
-        BK_LOGI(TAG, "APSTA provisioning succeeded\r\n");
+        MYBOT_LOGI(TAG, "APSTA provisioning succeeded");
     }
     return result;
 }
@@ -821,7 +821,7 @@ static int wifi_init(void **out_ctx, const char *device_id,
         emit_sdk_transition_locked(manager, MYBOT_WIFI_EVENT_STA_CONNECTED);
     }
     (void)rtos_unlock_mutex(&manager->lock);
-    BK_LOGI(TAG, "Wi-Fi callbacks attached to MyBot\r\n");
+    MYBOT_LOGI(TAG, "Wi-Fi callbacks attached to MyBot");
     return 0;
 }
 
@@ -837,7 +837,7 @@ static void wifi_destroy(void *opaque) {
     manager->emit_user_data = NULL;
     manager->last_sdk_event_valid = false;
     (void)rtos_unlock_mutex(&manager->lock);
-    BK_LOGI(TAG, "Wi-Fi callbacks detached from MyBot\r\n");
+    MYBOT_LOGI(TAG, "Wi-Fi callbacks detached from MyBot");
 }
 
 const mybot_wifi_ops_t g_mybot_bk7259_wifi_ops = {

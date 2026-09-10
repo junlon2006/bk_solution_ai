@@ -5,7 +5,7 @@
 #include "bk7259_prompt.h"
 #include <mybot_bk7259_platform.h>
 
-#include <components/log.h>
+#include "bk7259_platform_log.h"
 #include <os/mem.h>
 #include <os/os.h>
 
@@ -43,13 +43,13 @@ static int play_asset(const char *path) {
     int result = -1;
 
     if (!path || bk7259_asset_find(path, &asset) < 0) {
-        BK_LOGW(TAG, "prompt asset unavailable: %s\n", path ? path : "(null)");
+        MYBOT_LOGW(TAG, "prompt asset unavailable: %s", path ? path : "(null)");
         return -1;
     }
     if (bk7259_ogg_pcm_load_memory(path, asset.data, asset.size, PROMPT_RATE_HZ,
                                    &decoded) < 0 || decoded.frames <= 0 ||
         (size_t)decoded.frames > PROMPT_MAX_FRAMES) {
-        BK_LOGW(TAG, "prompt decode failed or out of range: %s\n", path);
+        MYBOT_LOGW(TAG, "prompt decode failed or out of range: %s", path);
         bk7259_ogg_pcm_free(&decoded);
         return -1;
     }
@@ -77,12 +77,12 @@ static int play_asset(const char *path) {
         int written = g_mybot_bk7259_playback_ops.write(
             playback_ctx, decoded.pcm + offset, requested);
         if (written < 0 || written > requested) {
-            BK_LOGW(TAG, "prompt write failed: %s offset=%d\n", path, offset);
+            MYBOT_LOGW(TAG, "prompt write failed: %s offset=%d", path, offset);
             goto cleanup;
         }
         if (written == 0) {
             if (++timeout_count >= PROMPT_MAX_CONSECUTIVE_TIMEOUTS) {
-                BK_LOGW(TAG, "prompt write timed out: %s\n", path);
+                MYBOT_LOGW(TAG, "prompt write timed out: %s", path);
                 goto cleanup;
             }
             (void)rtos_delay_milliseconds(1);
@@ -125,11 +125,11 @@ static int play_prompt(const char *path) {
 }
 
 int bk7259_prompt_play_provisioning(void) {
-    BK_LOGI(TAG, "playing provisioning prompt\n");
+    MYBOT_LOGI(TAG, "playing provisioning prompt");
     return play_prompt(PROVISIONING_PROMPT_PATH);
 }
 
 int bk7259_prompt_play_success(void) {
-    BK_LOGI(TAG, "playing provisioning success prompt\n");
+    MYBOT_LOGI(TAG, "playing provisioning success prompt");
     return play_prompt(SUCCESS_PROMPT_PATH);
 }

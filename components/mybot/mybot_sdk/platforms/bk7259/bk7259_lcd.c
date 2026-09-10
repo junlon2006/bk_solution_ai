@@ -7,7 +7,7 @@
 #include <common/bk_err.h>
 #include <components/bk_display.h>
 #include <components/bk_frame_buffer.h>
-#include <components/log.h>
+#include "bk7259_platform_log.h"
 #include <driver/gpio.h>
 #include <gpio_driver.h>
 #include <lcd/lcd_mipi_jd9855_320x385.h>
@@ -467,7 +467,7 @@ static int wait_for_frame(unsigned int *out_index)
         uint32_t elapsed = rtos_get_time() - started_at;
         if (elapsed >= LCD_RENDER_TIMEOUT_MS ||
             rtos_get_semaphore(&s_lcd.frame_done, LCD_RENDER_TIMEOUT_MS - elapsed) != BK_OK) {
-            BK_LOGE(TAG, "timed out waiting for a display frame\r\n");
+            MYBOT_LOGE(TAG, "timed out waiting for a display frame");
             return -1;
         }
     }
@@ -486,7 +486,7 @@ static int submit_content_locked(const mybot_lcd_content_t *content)
         bk_display_flush(s_lcd.controller, s_lcd.frames[index], frame_release_callback);
     if (result != AVDK_ERR_OK) {
         /* A failed update may already have become the active scanout frame. */
-        BK_LOGE(TAG, "frame submission failed: %d\r\n", result);
+        MYBOT_LOGE(TAG, "frame submission failed: %d", result);
         return -1;
     }
     s_lcd.next_frame = (index + 1) % LCD_FRAME_COUNT;
@@ -549,7 +549,7 @@ static int panel_power_off(void)
 
     if (s_lcd.backlight_gpio_owned) {
         if (set_backlight(false) != 0) {
-            BK_LOGW(TAG, "failed to disable panel backlight\r\n");
+            MYBOT_LOGW(TAG, "failed to disable panel backlight");
             result = -1;
         } else {
             s_lcd.backlight_gpio_owned = false;
@@ -557,7 +557,7 @@ static int panel_power_off(void)
     }
     if (bk_gpio_enable_output(LCD_RESET_GPIO) != BK_OK ||
         bk_gpio_set_output_low(LCD_RESET_GPIO) != BK_OK) {
-        BK_LOGW(TAG, "failed to assert panel reset\r\n");
+        MYBOT_LOGW(TAG, "failed to assert panel reset");
         return -1;
     }
     if (s_lcd.vddio_owned) {
@@ -568,14 +568,14 @@ static int panel_power_off(void)
             .state = PM_AUXLDO_DISABLE,
         };
         if (bk_pm_auxldo_ctrl_vote(&vddio) != BK_OK) {
-            BK_LOGW(TAG, "failed to release panel VDDIO\r\n");
+            MYBOT_LOGW(TAG, "failed to release panel VDDIO");
             return -1;
         }
         s_lcd.vddio_owned = false;
     }
     if (s_lcd.power_gpio_owned) {
         if (bk_gpio_set_output_low(LCD_POWER_GPIO) != BK_OK) {
-            BK_LOGW(TAG, "failed to disable panel 3.3V\r\n");
+            MYBOT_LOGW(TAG, "failed to disable panel 3.3V");
             result = -1;
         } else {
             s_lcd.power_gpio_owned = false;
@@ -601,20 +601,20 @@ static int teardown_locked(void)
     if (s_lcd.controller) {
         if (s_lcd.controller_open) {
             if (bk_display_close(s_lcd.controller) != AVDK_ERR_OK) {
-                BK_LOGW(TAG, "failed to close display controller\r\n");
+                MYBOT_LOGW(TAG, "failed to close display controller");
             } else {
                 s_lcd.controller_open = false;
             }
         }
         if (s_lcd.controller_inited) {
             if (bk_display_deinit(s_lcd.controller) != AVDK_ERR_OK) {
-                BK_LOGE(TAG, "display deinit failed; retaining owned framebuffers\r\n");
+                MYBOT_LOGE(TAG, "display deinit failed; retaining owned framebuffers");
                 return -1;
             }
             s_lcd.controller_inited = false;
         }
         if (bk_display_delete(s_lcd.controller) != AVDK_ERR_OK) {
-            BK_LOGE(TAG, "display delete failed; retaining owned framebuffers\r\n");
+            MYBOT_LOGE(TAG, "display delete failed; retaining owned framebuffers");
             return -1;
         }
         s_lcd.controller = NULL;
@@ -623,14 +623,14 @@ static int teardown_locked(void)
     }
     if (s_lcd.panel) {
         if (bk_lcd_panel_delete(s_lcd.panel) != BK_OK) {
-            BK_LOGE(TAG, "panel delete failed; retaining display resources\r\n");
+            MYBOT_LOGE(TAG, "panel delete failed; retaining display resources");
             return -1;
         }
         s_lcd.panel = NULL;
     }
     if (s_lcd.bus) {
         if (bk_display_bus_delete(s_lcd.bus) != AVDK_ERR_OK) {
-            BK_LOGE(TAG, "DSI bus delete failed; retaining display resources\r\n");
+            MYBOT_LOGE(TAG, "DSI bus delete failed; retaining display resources");
             return -1;
         }
         s_lcd.bus = NULL;
@@ -679,7 +679,7 @@ int bk7259_lcd_prepare(void)
     for (unsigned int index = 0; index < LCD_FRAME_COUNT; ++index) {
         s_lcd.frames[index] = bk_frame_buffer_malloc(MEM_SLAB_HEAP_UNCODED, LCD_FRAME_BYTES);
         if (!s_lcd.frames[index]) {
-            BK_LOGE(TAG, "failed to allocate framebuffer %u\r\n", index);
+            MYBOT_LOGE(TAG, "failed to allocate framebuffer %u", index);
             goto failed;
         }
     }
@@ -715,12 +715,12 @@ int bk7259_lcd_prepare(void)
     }
     s_lcd.prepared = true;
     s_lcd.accepting = true;
-    BK_LOGI(TAG, "JD9855 MIPI display ready\r\n");
+    MYBOT_LOGI(TAG, "JD9855 MIPI display ready");
     rtos_unlock_mutex(&s_lcd_lock);
     return 0;
 
 failed:
-    BK_LOGE(TAG, "display preparation failed\r\n");
+    MYBOT_LOGE(TAG, "display preparation failed");
     (void)teardown_locked();
     s_lcd.prepared = false;
     rtos_unlock_mutex(&s_lcd_lock);
@@ -738,7 +738,7 @@ void bk7259_lcd_shutdown(void)
         int result = teardown_locked();
         s_lcd.prepared = false;
         if (result == 0) {
-            BK_LOGI(TAG, "display shut down\r\n");
+            MYBOT_LOGI(TAG, "display shut down");
         }
     }
     rtos_unlock_mutex(&s_lcd_lock);

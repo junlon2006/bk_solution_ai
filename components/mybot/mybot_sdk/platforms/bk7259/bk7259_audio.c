@@ -11,7 +11,7 @@
 #include <components/bk_audio/audio_streams/onboard_mic_stream_v2.h>
 #include <components/bk_audio/audio_streams/onboard_speaker_stream_v2.h>
 #include <components/bk_audio/audio_streams/raw_stream.h>
-#include <components/log.h>
+#include "bk7259_platform_log.h"
 #include <components/system.h>
 #include <modules/pm.h>
 #include <modules/wifi.h>
@@ -84,22 +84,22 @@ static bool playback_gain_context_is_usable(audio_context_t *ctx) {
 
 static int playback_owner_acquire(audio_context_t *ctx) {
     if (!ctx) {
-        BK_LOGE(TAG, "playback owner acquire: invalid context\r\n");
+        MYBOT_LOGE(TAG, "playback owner acquire: invalid context");
         return -1;
     }
     if (aosl_static_lock_lock(&s_playback_owner_lock) < 0) {
-        BK_LOGE(TAG, "playback owner lock failed\r\n");
+        MYBOT_LOGE(TAG, "playback owner lock failed");
         return -1;
     }
     if (s_playback_owner) {
-        BK_LOGW(TAG, "playback owner busy; rejecting second speaker pipeline\r\n");
+        MYBOT_LOGW(TAG, "playback owner busy; rejecting second speaker pipeline");
         (void)aosl_static_lock_unlock(&s_playback_owner_lock);
         return -1;
     }
     s_playback_owner = ctx;
     ctx->playback_owner_reserved = true;
     (void)aosl_static_lock_unlock(&s_playback_owner_lock);
-    BK_LOGI(TAG, "playback owner acquired\r\n");
+    MYBOT_LOGI(TAG, "playback owner acquired");
     return 0;
 }
 
@@ -108,7 +108,7 @@ static void playback_owner_release(audio_context_t *ctx) {
         return;
     }
     if (aosl_static_lock_lock(&s_playback_owner_lock) < 0) {
-        BK_LOGE(TAG, "playback owner release lock failed\r\n");
+        MYBOT_LOGE(TAG, "playback owner release lock failed");
         return;
     }
     if (s_playback_owner == ctx) {
@@ -116,22 +116,22 @@ static void playback_owner_release(audio_context_t *ctx) {
     }
     ctx->playback_owner_reserved = false;
     (void)aosl_static_lock_unlock(&s_playback_owner_lock);
-    BK_LOGI(TAG, "playback owner released\r\n");
+    MYBOT_LOGI(TAG, "playback owner released");
 }
 
 int bk7259_audio_playback_gain_publish(void *opaque) {
     audio_context_t *ctx = opaque;
 
     if (!ctx || !ctx->device) {
-        BK_LOGW(TAG, "playback gain publish: speaker unavailable\r\n");
+        MYBOT_LOGW(TAG, "playback gain publish: speaker unavailable");
         return -1;
     }
     if (aosl_static_lock_lock(&s_playback_gain_lock) < 0) {
-        BK_LOGE(TAG, "playback gain publish lock failed\r\n");
+        MYBOT_LOGE(TAG, "playback gain publish lock failed");
         return -1;
     }
     if (s_playback_gain_context && s_playback_gain_context != ctx) {
-        BK_LOGW(TAG, "playback gain already owned by another speaker\r\n");
+        MYBOT_LOGW(TAG, "playback gain already owned by another speaker");
         (void)aosl_static_lock_unlock(&s_playback_gain_lock);
         return -1;
     }
@@ -145,7 +145,7 @@ void bk7259_audio_playback_gain_unpublish(void *opaque) {
 
     if (!ctx || aosl_static_lock_lock(&s_playback_gain_lock) < 0) {
         if (ctx) {
-            BK_LOGE(TAG, "playback gain unpublish lock failed\r\n");
+            MYBOT_LOGE(TAG, "playback gain unpublish lock failed");
         }
         return;
     }
@@ -159,7 +159,7 @@ int bk7259_audio_playback_gain_set(float gain_db) {
     int result = -1;
 
     if (aosl_static_lock_lock(&s_playback_gain_lock) < 0) {
-        BK_LOGE(TAG, "playback gain set lock failed\r\n");
+        MYBOT_LOGE(TAG, "playback gain set lock failed");
         return -1;
     }
     if (s_playback_gain_context && playback_gain_context_is_usable(s_playback_gain_context) &&
@@ -167,7 +167,7 @@ int bk7259_audio_playback_gain_set(float gain_db) {
         result = 0;
     }
     if (result < 0) {
-        BK_LOGW(TAG, "playback gain set unavailable or rejected (%.2f dB)\r\n", gain_db);
+        MYBOT_LOGW(TAG, "playback gain set unavailable or rejected (%.2f dB)", gain_db);
     }
     (void)aosl_static_lock_unlock(&s_playback_gain_lock);
     return result;
@@ -178,7 +178,7 @@ int bk7259_audio_playback_gain_get(float *gain_db) {
 
     if (!gain_db || aosl_static_lock_lock(&s_playback_gain_lock) < 0) {
         if (gain_db) {
-            BK_LOGE(TAG, "playback gain get lock failed\r\n");
+            MYBOT_LOGE(TAG, "playback gain get lock failed");
         }
         return -1;
     }
@@ -187,7 +187,7 @@ int bk7259_audio_playback_gain_get(float *gain_db) {
         result = 0;
     }
     if (result < 0) {
-        BK_LOGW(TAG, "playback gain get unavailable\r\n");
+        MYBOT_LOGW(TAG, "playback gain get unavailable");
     }
     (void)aosl_static_lock_unlock(&s_playback_gain_lock);
     return result;
@@ -195,7 +195,7 @@ int bk7259_audio_playback_gain_get(float *gain_db) {
 
 static int io_state_init(io_state_t *state) {
     if (!state) {
-        BK_LOGE(TAG, "audio I/O state: invalid context\r\n");
+        MYBOT_LOGE(TAG, "audio I/O state: invalid context");
         return -1;
     }
     state->lock = aosl_lock_create();
@@ -207,7 +207,7 @@ static int io_state_init(io_state_t *state) {
         if (state->lock) {
             aosl_lock_destroy(state->lock);
         }
-        BK_LOGE(TAG, "audio I/O state allocation failed\r\n");
+        MYBOT_LOGE(TAG, "audio I/O state allocation failed");
         return -1;
     }
     return 0;
@@ -278,20 +278,20 @@ static void io_finish_stop(audio_context_t *ctx, bool failed) {
  * the controller leaves it. */
 static int audio_pm_vote_on(void) {
     if (bk_pm_module_vote_cpu_freq(PM_DEV_ID_AUDIO, PM_CPU_FRQ_480M) != BK_OK) {
-        BK_LOGE(TAG, "audio CPU vote to 480 MHz failed\r\n");
+        MYBOT_LOGE(TAG, "audio CPU vote to 480 MHz failed");
         return -1;
     }
     if (bk_pm_module_vote_sleep_ctrl(PM_SLEEP_MODULE_NAME_AUDP, 0, 0) != BK_OK) {
-        BK_LOGE(TAG, "AUDP sleep-disable vote failed\r\n");
+        MYBOT_LOGE(TAG, "AUDP sleep-disable vote failed");
         if (bk_pm_module_vote_cpu_freq(PM_DEV_ID_AUDIO, PM_CPU_FRQ_DEFAULT) != BK_OK) {
-            BK_LOGE(TAG, "audio CPU vote rollback failed\r\n");
+            MYBOT_LOGE(TAG, "audio CPU vote rollback failed");
         }
         return -1;
     }
     if (bk_wifi_set_video_quality(WIFI_VIDEO_QUALITY_FD) != BK_OK) {
-        BK_LOGW(TAG, "Wi-Fi FD media-quality setting failed\r\n");
+        MYBOT_LOGW(TAG, "Wi-Fi FD media-quality setting failed");
     }
-    BK_LOGI(TAG, "active: CPU=480 MHz, AUDP sleep=disabled, Wi-Fi quality=FD\r\n");
+    MYBOT_LOGI(TAG, "active: CPU=480 MHz, AUDP sleep=disabled, Wi-Fi quality=FD");
     return 0;
 }
 
@@ -299,14 +299,14 @@ static int audio_pm_acquire(void) {
     int result = 0;
 
     if (aosl_static_lock_lock(&s_audio_pm_lock) < 0) {
-        BK_LOGE(TAG, "audio CPU vote lock failed\r\n");
+        MYBOT_LOGE(TAG, "audio CPU vote lock failed");
         return -1;
     }
     if (s_audio_pm_users == 0 && audio_pm_vote_on() < 0) {
         result = -1;
     } else {
         s_audio_pm_users++;
-        BK_LOGI(TAG, "audio CPU vote acquired (users=%u)\r\n", s_audio_pm_users);
+        MYBOT_LOGI(TAG, "audio CPU vote acquired (users=%u)", s_audio_pm_users);
     }
     (void)aosl_static_lock_unlock(&s_audio_pm_lock);
     return result;
@@ -314,20 +314,20 @@ static int audio_pm_acquire(void) {
 
 static void audio_pm_release(void) {
     if (aosl_static_lock_lock(&s_audio_pm_lock) < 0) {
-        BK_LOGE(TAG, "audio CPU vote release lock failed\r\n");
+        MYBOT_LOGE(TAG, "audio CPU vote release lock failed");
         return;
     }
     if (s_audio_pm_users != 0 && --s_audio_pm_users == 0) {
         if (bk_pm_module_vote_cpu_freq(PM_DEV_ID_AUDIO, PM_CPU_FRQ_DEFAULT) != BK_OK) {
-            BK_LOGE(TAG, "failed to release audio CPU frequency vote\r\n");
+            MYBOT_LOGE(TAG, "failed to release audio CPU frequency vote");
         } else {
-            BK_LOGI(TAG, "audio CPU vote released (users=0)\r\n");
+            MYBOT_LOGI(TAG, "audio CPU vote released (users=0)");
         }
         if (bk_pm_module_vote_sleep_ctrl(PM_SLEEP_MODULE_NAME_AUDP, 1, 0) != BK_OK) {
-            BK_LOGE(TAG, "AUDP sleep-enable vote failed\r\n");
+            MYBOT_LOGE(TAG, "AUDP sleep-enable vote failed");
         }
     } else if (s_audio_pm_users != 0) {
-        BK_LOGI(TAG, "audio CPU vote retained (users=%u)\r\n", s_audio_pm_users);
+        MYBOT_LOGI(TAG, "audio CPU vote retained (users=%u)", s_audio_pm_users);
     }
     (void)aosl_static_lock_unlock(&s_audio_pm_lock);
 }
@@ -350,7 +350,7 @@ static void audio_context_release(audio_context_t *ctx) {
         return;
     }
 
-    BK_LOGI(TAG, "audio context destroy begin\r\n");
+    MYBOT_LOGI(TAG, "audio context destroy begin");
 
     /* Serialize with gain set/get before the speaker element is deinitialized. */
     bk7259_audio_playback_gain_unpublish(ctx);
@@ -374,12 +374,12 @@ static void audio_context_release(audio_context_t *ctx) {
     playback_owner_release(ctx);
     io_state_destroy(&ctx->io);
     aosl_free(ctx);
-    BK_LOGI(TAG, "audio context destroyed\r\n");
+    MYBOT_LOGI(TAG, "audio context destroyed");
 }
 
 static int audio_context_start(audio_context_t *ctx) {
     if (!ctx || !ctx->pipeline) {
-        BK_LOGE(TAG, "audio pipeline start: invalid context\r\n");
+        MYBOT_LOGE(TAG, "audio pipeline start: invalid context");
         return -1;
     }
 
@@ -388,7 +388,7 @@ static int audio_context_start(audio_context_t *ctx) {
         aosl_cond_wait(ctx->io.idle, ctx->io.lock);
     }
     if (ctx->failed) {
-        BK_LOGW(TAG, "audio pipeline start rejected after previous failure\r\n");
+        MYBOT_LOGW(TAG, "audio pipeline start rejected after previous failure");
         aosl_lock_unlock(ctx->io.lock);
         return -1;
     }
@@ -400,12 +400,12 @@ static int audio_context_start(audio_context_t *ctx) {
         audio_pipeline_run(ctx->pipeline) != BK_OK) {
         ctx->failed = true;
         aosl_lock_unlock(ctx->io.lock);
-        BK_LOGE(TAG, "audio pipeline start failed\r\n");
+        MYBOT_LOGE(TAG, "audio pipeline start failed");
         return -1;
     }
     ctx->io.started = true;
     aosl_lock_unlock(ctx->io.lock);
-    BK_LOGI(TAG, "audio pipeline started\r\n");
+    MYBOT_LOGI(TAG, "audio pipeline started");
     return 0;
 }
 
@@ -415,7 +415,7 @@ static int audio_context_abort_io(audio_context_t *ctx) {
 
 static int audio_context_stop(audio_context_t *ctx) {
     if (!ctx || !ctx->pipeline || !ctx->raw) {
-        BK_LOGE(TAG, "audio pipeline stop: invalid context\r\n");
+        MYBOT_LOGE(TAG, "audio pipeline stop: invalid context");
         return -1;
     }
     if (!io_begin_stop(&ctx->io)) {
@@ -424,22 +424,22 @@ static int audio_context_stop(audio_context_t *ctx) {
 
     int result = audio_context_abort_io(ctx);
     if (result < 0) {
-        BK_LOGE(TAG, "audio raw I/O abort failed\r\n");
+        MYBOT_LOGE(TAG, "audio raw I/O abort failed");
     }
     io_wait_idle(&ctx->io);
     if (audio_pipeline_stop(ctx->pipeline) != BK_OK) {
-        BK_LOGE(TAG, "audio pipeline stop failed\r\n");
+        MYBOT_LOGE(TAG, "audio pipeline stop failed");
         result = -1;
     }
     if (audio_pipeline_wait_for_stop(ctx->pipeline) != BK_OK) {
-        BK_LOGE(TAG, "audio pipeline wait-for-stop failed\r\n");
+        MYBOT_LOGE(TAG, "audio pipeline wait-for-stop failed");
         result = -1;
     }
     io_finish_stop(ctx, result < 0);
     if (result == 0) {
-        BK_LOGI(TAG, "audio pipeline stopped\r\n");
+        MYBOT_LOGI(TAG, "audio pipeline stopped");
     } else {
-        BK_LOGE(TAG, "audio pipeline stopped with errors\r\n");
+        MYBOT_LOGE(TAG, "audio pipeline stopped with errors");
     }
     return result;
 }
@@ -448,23 +448,23 @@ static int capture_init(void **out_ctx, int rate, int channels, int bits) {
     const char *stage = "validate";
 
     if (!out_ctx || !format_supported(rate, channels, bits)) {
-        BK_LOGE(TAG, "capture init rejected: format=%d Hz/%d ch/%d bit\r\n", rate, channels,
+        MYBOT_LOGE(TAG, "capture init rejected: format=%d Hz/%d ch/%d bit", rate, channels,
                 bits);
         return -1;
     }
     *out_ctx = NULL;
-    BK_LOGI(TAG, "capture init: format=%d Hz/%d ch/%d bit\r\n", rate, channels, bits);
+    MYBOT_LOGI(TAG, "capture init: format=%d Hz/%d ch/%d bit", rate, channels, bits);
 
     stage = "allocate";
     audio_context_t *ctx = aosl_calloc(1, sizeof(*ctx));
     if (!ctx || io_state_init(&ctx->io) < 0) {
-        BK_LOGE(TAG, "capture init failed at allocate\r\n");
+        MYBOT_LOGE(TAG, "capture init failed at allocate");
         aosl_free(ctx);
         return -1;
     }
     stage = "audio_cpu_vote";
     if (audio_pm_acquire() < 0) {
-        BK_LOGE(TAG, "capture init failed at audio CPU vote\r\n");
+        MYBOT_LOGE(TAG, "capture init failed at audio CPU vote");
         audio_context_release(ctx);
         return -1;
     }
@@ -566,17 +566,17 @@ static int capture_init(void **out_ctx, int rate, int channels, int bits) {
     }
 
     *out_ctx = ctx;
-    BK_LOGI(TAG, "capture ready\r\n");
+    MYBOT_LOGI(TAG, "capture ready");
     return 0;
 
 fail:
-    BK_LOGE(TAG, "capture init failed at %s\r\n", stage);
+    MYBOT_LOGE(TAG, "capture init failed at %s", stage);
     audio_context_release(ctx);
     return -1;
 }
 
 static int capture_start(void *opaque) {
-    BK_LOGI(TAG, "capture start requested\r\n");
+    MYBOT_LOGI(TAG, "capture start requested");
     return audio_context_start(opaque);
 }
 
@@ -605,7 +605,7 @@ static int capture_read(void *opaque, void *buf, int frames) {
 }
 
 static int capture_stop(void *opaque) {
-    BK_LOGI(TAG, "capture stop requested\r\n");
+    MYBOT_LOGI(TAG, "capture stop requested");
     return audio_context_stop(opaque);
 }
 
@@ -614,7 +614,7 @@ static void capture_destroy(void *opaque) {
     if (!ctx) {
         return;
     }
-    BK_LOGI(TAG, "capture destroy requested\r\n");
+    MYBOT_LOGI(TAG, "capture destroy requested");
     (void)audio_context_stop(ctx);
     audio_context_release(ctx);
 }
@@ -623,30 +623,30 @@ static int playback_init(void **out_ctx, int rate, int channels, int bits) {
     const char *stage = "validate";
 
     if (!out_ctx || !format_supported(rate, channels, bits)) {
-        BK_LOGE(TAG, "playback init rejected: format=%d Hz/%d ch/%d bit\r\n", rate, channels,
+        MYBOT_LOGE(TAG, "playback init rejected: format=%d Hz/%d ch/%d bit", rate, channels,
                 bits);
         return -1;
     }
     *out_ctx = NULL;
-    BK_LOGI(TAG, "playback init: format=%d Hz/%d ch/%d bit\r\n", rate, channels, bits);
+    MYBOT_LOGI(TAG, "playback init: format=%d Hz/%d ch/%d bit", rate, channels, bits);
 
     stage = "allocate";
     audio_context_t *ctx = aosl_calloc(1, sizeof(*ctx));
     if (!ctx || io_state_init(&ctx->io) < 0) {
-        BK_LOGE(TAG, "playback init failed at allocate\r\n");
+        MYBOT_LOGE(TAG, "playback init failed at allocate");
         aosl_free(ctx);
         return -1;
     }
     stage = "playback_owner";
     if (playback_owner_acquire(ctx) < 0) {
-        BK_LOGE(TAG, "playback init failed at playback owner\r\n");
+        MYBOT_LOGE(TAG, "playback init failed at playback owner");
         io_state_destroy(&ctx->io);
         aosl_free(ctx);
         return -1;
     }
     stage = "audio_cpu_vote";
     if (audio_pm_acquire() < 0) {
-        BK_LOGE(TAG, "playback init failed at audio CPU vote\r\n");
+        MYBOT_LOGE(TAG, "playback init failed at audio CPU vote");
         audio_context_release(ctx);
         return -1;
     }
@@ -724,23 +724,23 @@ static int playback_init(void **out_ctx, int rate, int channels, int bits) {
     }
 
     *out_ctx = ctx;
-    BK_LOGI(TAG, "playback ready\r\n");
+    MYBOT_LOGI(TAG, "playback ready");
     return 0;
 
 fail:
-    BK_LOGE(TAG, "playback init failed at %s\r\n", stage);
+    MYBOT_LOGE(TAG, "playback init failed at %s", stage);
     audio_context_release(ctx);
     return -1;
 }
 
 static int playback_start(void *opaque) {
-    BK_LOGI(TAG, "playback start requested\r\n");
+    MYBOT_LOGI(TAG, "playback start requested");
     int result = audio_context_start(opaque);
     if (result < 0) {
         return result;
     }
     if (bk7259_audio_playback_gain_publish(opaque) < 0) {
-        BK_LOGE(TAG, "playback start failed to publish gain context\r\n");
+        MYBOT_LOGE(TAG, "playback start failed to publish gain context");
         (void)audio_context_stop(opaque);
         return -1;
     }
@@ -773,7 +773,7 @@ static int playback_write(void *opaque, const void *buf, int frames) {
 
 static int playback_stop(void *opaque) {
     /* Stop accepting gain operations before interrupting the pipeline. */
-    BK_LOGI(TAG, "playback stop requested\r\n");
+    MYBOT_LOGI(TAG, "playback stop requested");
     bk7259_audio_playback_gain_unpublish(opaque);
     return audio_context_stop(opaque);
 }
@@ -783,7 +783,7 @@ static void playback_destroy(void *opaque) {
     if (!ctx) {
         return;
     }
-    BK_LOGI(TAG, "playback destroy requested\r\n");
+    MYBOT_LOGI(TAG, "playback destroy requested");
     bk7259_audio_playback_gain_unpublish(ctx);
     (void)audio_context_stop(ctx);
     audio_context_release(ctx);

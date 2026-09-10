@@ -4,7 +4,7 @@
 
 #include <adc_key_main.h>
 #include <common/bk_err.h>
-#include <components/log.h>
+#include "bk7259_platform_log.h"
 #include <mybot/mybot.h>
 #include <os/os.h>
 
@@ -241,15 +241,15 @@ static void key_conversation_short_press(void) {
     }
     switch (mybot_get_state()) {
     case MYBOT_STATE_READY:
-        BK_LOGI(TAG, "conversation key short press: start\r\n");
+        MYBOT_LOGI(TAG, "conversation key short press: start");
         emit_key_event(MYBOT_KEY_EVENT_CONVERSATION_START);
         break;
     case MYBOT_STATE_IN_CONVERSATION:
-        BK_LOGI(TAG, "conversation key short press: stop\r\n");
+        MYBOT_LOGI(TAG, "conversation key short press: stop");
         emit_key_event(MYBOT_KEY_EVENT_CONVERSATION_STOP);
         break;
     default:
-        BK_LOGI(TAG, "conversation key short press ignored\r\n");
+        MYBOT_LOGI(TAG, "conversation key short press ignored");
         break;
     }
 }
@@ -259,18 +259,18 @@ static void key_conversation_short_press(void) {
  * mybot_stop() has returned. */
 static void key_conversation_long_press(void) {
     if (rtos_set_semaphore(&s_key.provision_request) != BK_OK) {
-        BK_LOGW(TAG, "conversation key long press: failed to post provisioning "
-                     "request\r\n");
+        MYBOT_LOGW(TAG, "conversation key long press: failed to post provisioning "
+                     "request");
         return;
     }
-    BK_LOGI(TAG, "conversation key long press: provisioning requested\r\n");
+    MYBOT_LOGI(TAG, "conversation key long press: provisioning requested");
 }
 
 static void key_volume_up_short_press(void) {
     if (!key_is_attached()) {
         return;
     }
-    BK_LOGI(TAG, "volume up key short press\r\n");
+    MYBOT_LOGI(TAG, "volume up key short press");
     emit_key_event(MYBOT_KEY_EVENT_VOLUME_UP);
 }
 
@@ -278,7 +278,7 @@ static void key_volume_down_short_press(void) {
     if (!key_is_attached()) {
         return;
     }
-    BK_LOGI(TAG, "volume down key short press\r\n");
+    MYBOT_LOGI(TAG, "volume down key short press");
     emit_key_event(MYBOT_KEY_EVENT_VOLUME_DOWN);
 }
 
@@ -286,15 +286,15 @@ static void key_volume_down_short_press(void) {
  * request and the application loop performs it after mybot_stop(). */
 static void key_factory_reset_long_press(void) {
     if (rtos_set_semaphore(&s_key.reset_request) != BK_OK) {
-        BK_LOGW(TAG, "factory reset key long press: failed to post reset "
-                     "request\r\n");
+        MYBOT_LOGW(TAG, "factory reset key long press: failed to post reset "
+                     "request");
         return;
     }
-    BK_LOGW(TAG, "factory reset key long press: factory reset requested\r\n");
+    MYBOT_LOGW(TAG, "factory reset key long press: factory reset requested");
 }
 
 static void key_reserved_short_press(void) {
-    BK_LOGI(TAG, "reserved key short press (unassigned)\r\n");
+    MYBOT_LOGI(TAG, "reserved key short press (unassigned)");
 }
 
 /* Runs on the adc_key component's timer callback while it holds its own
@@ -305,14 +305,14 @@ static void key_dispatch(const key_item_t *item, bool long_press) {
     void (*handler)(void);
 
     if (item->function >= KEY_FUNC_COUNT) {
-        BK_LOGW(TAG, "%s: unknown function %u\r\n", item->name,
+        MYBOT_LOGW(TAG, "%s: unknown function %u", item->name,
                 (unsigned)item->function);
         return;
     }
     handler = long_press ? s_key_functions[item->function].long_press
                          : s_key_functions[item->function].short_press;
     if (handler == NULL) {
-        BK_LOGI(TAG, "%s: %s press is unassigned\r\n", item->name,
+        MYBOT_LOGI(TAG, "%s: %s press is unassigned", item->name,
                 long_press ? "long" : "short");
         return;
     }
@@ -349,13 +349,13 @@ static void key_detach(void) {
     rtos_lock_mutex(&s_key.lock);
     s_key.detaching = false;
     rtos_unlock_mutex(&s_key.lock);
-    BK_LOGI(TAG, "key callbacks detached\r\n");
+    MYBOT_LOGI(TAG, "key callbacks detached");
 }
 
 static void key_release_framework(void) {
     if (s_key.adc_key_owned) {
         if (bk_adc_key_deinit_ex() != BK_OK) {
-            BK_LOGW(TAG, "ADC key manager deinitialization failed\r\n");
+            MYBOT_LOGW(TAG, "ADC key manager deinitialization failed");
         }
         s_key.adc_key_owned = false;
     }
@@ -387,12 +387,12 @@ static int key_register(const key_item_t *item) {
     adc_key_handle_t handle = NULL;
 
     if (s_key.handle_count >= MYBOT_KEY_ITEM_MAX) {
-        BK_LOGE(TAG, "key table holds at most %u entries\r\n",
+        MYBOT_LOGE(TAG, "key table holds at most %u entries",
                 (unsigned)MYBOT_KEY_ITEM_MAX);
         return -1;
     }
     if (bk_adc_key_item_configure_ex(&config, &handle) != BK_OK) {
-        BK_LOGE(TAG, "key %s configuration failed (chan=%u window=%u..%umV)\r\n",
+        MYBOT_LOGE(TAG, "key %s configuration failed (chan=%u window=%u..%umV)",
                 item->name, (unsigned)item->chan, (unsigned)item->mv_low,
                 (unsigned)item->mv_high);
         return -1;
@@ -414,22 +414,22 @@ int bk7259_key_prepare(void) {
         return 0;
     }
     if (rtos_init_mutex(&s_key.lock) != BK_OK) {
-        BK_LOGE(TAG, "key mutex initialization failed\r\n");
+        MYBOT_LOGE(TAG, "key mutex initialization failed");
         return -1;
     }
     if (rtos_init_semaphore(&s_key.callback_idle, 1) != BK_OK) {
-        BK_LOGE(TAG, "key callback barrier initialization failed\r\n");
+        MYBOT_LOGE(TAG, "key callback barrier initialization failed");
         rtos_deinit_mutex(&s_key.lock);
         return -1;
     }
     if (rtos_init_semaphore(&s_key.provision_request, 1) != BK_OK) {
-        BK_LOGE(TAG, "key provisioning semaphore initialization failed\r\n");
+        MYBOT_LOGE(TAG, "key provisioning semaphore initialization failed");
         rtos_deinit_semaphore(&s_key.callback_idle);
         rtos_deinit_mutex(&s_key.lock);
         return -1;
     }
     if (rtos_init_semaphore(&s_key.reset_request, 1) != BK_OK) {
-        BK_LOGE(TAG, "key reset semaphore initialization failed\r\n");
+        MYBOT_LOGE(TAG, "key reset semaphore initialization failed");
         rtos_deinit_semaphore(&s_key.provision_request);
         rtos_deinit_semaphore(&s_key.callback_idle);
         rtos_deinit_mutex(&s_key.lock);
@@ -437,8 +437,8 @@ int bk7259_key_prepare(void) {
     }
 
     if (bk_adc_key_init_ex(&driver_config) != BK_OK) {
-        BK_LOGE(TAG, "ADC key manager initialization failed; is the SARADC "
-                     "sampler running on the CP?\r\n");
+        MYBOT_LOGE(TAG, "ADC key manager initialization failed; is the SARADC "
+                     "sampler running on the CP?");
         goto fail;
     }
     s_key.adc_key_owned = true;
@@ -450,13 +450,13 @@ int bk7259_key_prepare(void) {
     }
 
     s_key.prepared = true;
-    BK_LOGI(TAG, "key ready: items=%u ch=%u,%u\r\n",
+    MYBOT_LOGI(TAG, "key ready: items=%u ch=%u,%u",
             (unsigned)s_key.handle_count,
             (unsigned)CONFIG_MYBOT_KEY_ADC_CH1_CHAN,
             (unsigned)CONFIG_MYBOT_KEY_ADC_CH2_CHAN);
     for (size_t i = 0; i < KEY_ITEM_COUNT; ++i) {
         const key_item_t *item = &s_key_items[i];
-        BK_LOGI(TAG, "%s: id=%u chan=%u window=%u..%umV func=%s\r\n", item->name,
+        MYBOT_LOGI(TAG, "%s: id=%u chan=%u window=%u..%umV func=%s", item->name,
                 (unsigned)item->id, (unsigned)item->chan,
                 (unsigned)item->mv_low, (unsigned)item->mv_high,
                 key_function_name(item->function));
@@ -476,7 +476,7 @@ void bk7259_key_shutdown(void) {
     key_detach();
     key_release_framework();
     s_key.prepared = false;
-    BK_LOGI(TAG, "key stopped\r\n");
+    MYBOT_LOGI(TAG, "key stopped");
 }
 
 bool mybot_bk7259_wait_provision_request(uint32_t timeout_ms) {
@@ -511,7 +511,7 @@ static int key_init(void **out_ctx, mybot_key_event_handler_t emit, void *user_d
     *out_ctx = &s_key;
     s_key.sdk_attached = true;
     rtos_unlock_mutex(&s_key.lock);
-    BK_LOGI(TAG, "key callbacks attached\r\n");
+    MYBOT_LOGI(TAG, "key callbacks attached");
     return 0;
 }
 

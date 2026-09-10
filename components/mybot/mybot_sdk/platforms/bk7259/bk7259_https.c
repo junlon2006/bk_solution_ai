@@ -4,7 +4,7 @@
 #include <mybot/platform/mybot_https.h>
 
 #include <common/bk_err.h>
-#include <components/log.h>
+#include "bk7259_platform_log.h"
 #include <os/mem.h>
 #include <os/os.h>
 
@@ -62,7 +62,7 @@ static int deadline_remaining_ms(uint32_t start, uint32_t timeout_ms) {
 static void log_tls_error(const char *operation, int error) {
     char description[96];
     mbedtls_strerror(error, description, sizeof(description));
-    BK_LOGE(TAG, "%s failed (-0x%04x: %s)\n", operation,
+    MYBOT_LOGE(TAG, "%s failed (-0x%04x: %s)", operation,
             (unsigned int)(error < 0 ? -error : error), description);
 }
 
@@ -146,7 +146,7 @@ static int resolve_host(ip_addr_t *address, const char *host, uint32_t start,
     rtos_unlock_mutex(&request->lock);
 
     if (!finished) {
-        BK_LOGE(TAG, "DNS timeout, host=%s\n", host);
+        MYBOT_LOGE(TAG, "DNS timeout, host=%s", host);
         return -1;
     }
 
