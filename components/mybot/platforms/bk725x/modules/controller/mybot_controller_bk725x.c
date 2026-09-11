@@ -63,7 +63,7 @@ typedef struct {
 static beken_thread_t s_controller_thread;
 
 static void show_display_screen(const app_runtime_t *runtime, mybot_display_screen_t screen) {
-    if (runtime->display_initialized && mybot_display_show_screen(screen) < 0) {
+    if (runtime->display_initialized && mybot_display_show_screen(screen, 0) < 0) {
         MYBOT_LOGW(TAG, "failed to render display screen=%d", (int)screen);
     }
 }
