@@ -742,7 +742,7 @@ int mybot_agora_rtc_init(const char *app_id, const mybot_agora_rtc_callbacks_t *
     rtc_service_option_t options;
     memset(&options, 0, sizeof(options));
     options.area_code = AREA_CODE_GLOB;
-    options.log_cfg.log_level = RTC_LOG_WARNING;
+    options.log_cfg.log_level = RTC_LOG_NOTICE;
     options.use_string_uid = true;
 
     int ret = agora_rtc_init((void *)app_id, &handler, &options);
