@@ -57,7 +57,7 @@ typedef struct {
     bool network_connected;
     bool sdk_active;
     bool provision_requested;
-    uint32_t wifi_generation;
+    bool network_success_prompt_pending;
 } app_runtime_t;
 
 static beken_thread_t s_controller_thread;
@@ -110,13 +110,6 @@ static void log_state_transition(mybot_state_t *last_state, bool *valid) {
                 controller_state_name(current), (int)current);
         *last_state = current;
     }
-}
-
-static uint32_t next_wifi_generation(app_runtime_t *runtime) {
-    if (++runtime->wifi_generation == 0) {
-        ++runtime->wifi_generation;
-    }
-    return runtime->wifi_generation;
 }
 
 static int build_device_config(mybot_config_t *config) {
@@ -194,7 +187,7 @@ static int start_network(app_runtime_t *runtime) {
     MYBOT_LOGI(TAG, "starting normal STA networking");
     runtime->network_connected = false;
     publish_connectivity(MYBOT_CONNECTIVITY_DISCONNECTED);
-    if (mybot_network_start(next_wifi_generation(runtime)) < 0) {
+    if (mybot_network_start() < 0) {
         MYBOT_LOGE(TAG, "normal STA networking start failed");
         return -1;
     }
@@ -218,8 +211,7 @@ static void stop_network(app_runtime_t *runtime) {
 
 static int start_provisioning(app_runtime_t *runtime) {
     MYBOT_LOGI(TAG, "starting APSTA provisioning");
-    if (mybot_provisioning_start(runtime->config.device_id,
-                                 next_wifi_generation(runtime)) < 0) {
+    if (mybot_provisioning_start(runtime->config.device_id) < 0) {
         MYBOT_LOGE(TAG, "APSTA provisioning start failed");
         return -1;
     }
@@ -257,6 +249,12 @@ static int start_sdk(app_runtime_t *runtime) {
         MYBOT_LOGE(TAG, "shared playback start failed");
         return -1;
     }
+    if (runtime->network_success_prompt_pending) {
+        if (mybot_prompt_player_bk725x_play_success_sync() < 0) {
+            MYBOT_LOGW(TAG, "failed to play provisioning success prompt");
+        }
+        runtime->network_success_prompt_pending = false;
+    }
     if (bk725x_platform_adapters_register() < 0) {
         return -1;
     }
@@ -270,7 +268,6 @@ static int start_sdk(app_runtime_t *runtime) {
     }
 
     runtime->sdk_active = true;
-    (void)mybot_prompt_player_bk725x_play_success();
     MYBOT_LOGI(TAG, "mybot SDK started");
     return 0;
 }
@@ -332,18 +329,21 @@ static void handle_button_event(app_runtime_t *runtime, const mybot_event_t *eve
     forward_button_event(runtime, event->type);
 }
 
+static void controller_wait_for_button(app_runtime_t *runtime) {
+    mybot_event_t event;
+    if (mybot_event_wait(&event, CONTROLLER_POLL_MS) == 0) {
+        handle_button_event(runtime, &event);
+    }
+}
+
 /* Wait for the STA worker to report a usable IPv4 connection.  A provisioning
  * request interrupts the wait; the caller restarts the top of the loop. */
 static int wait_for_network(app_runtime_t *runtime) {
-    mybot_event_t event;
-
     while (!mybot_network_is_connected()) {
         if (runtime->provision_requested) {
             return 0;
         }
-        if (mybot_event_wait(&event, CONTROLLER_POLL_MS) == 0) {
-            handle_button_event(runtime, &event);
-        }
+        controller_wait_for_button(runtime);
     }
     update_network_state(runtime);
     return 0;
@@ -351,8 +351,6 @@ static int wait_for_network(app_runtime_t *runtime) {
 
 /* Wait for the APSTA worker's authoritative result, keeping buttons live. */
 static int wait_for_provisioning(app_runtime_t *runtime) {
-    mybot_event_t event;
-
     for (;;) {
         mybot_provisioning_state_t state = mybot_provisioning_get_state();
 
@@ -366,9 +364,7 @@ static int wait_for_provisioning(app_runtime_t *runtime) {
             stop_provisioning(runtime);
             return -1;
         }
-        if (mybot_event_wait(&event, CONTROLLER_POLL_MS) == 0) {
-            handle_button_event(runtime, &event);
-        }
+        controller_wait_for_button(runtime);
     }
 }
 
@@ -395,6 +391,7 @@ static int controller_run(app_runtime_t *runtime) {
             if (start_provisioning(runtime) < 0 || wait_for_provisioning(runtime) < 0) {
                 return -1;
             }
+            runtime->network_success_prompt_pending = true;
             /* Save credentials are now present: restart the top of the loop
              * so the STA worker is started before waiting for connectivity. */
             continue;
@@ -420,10 +417,7 @@ static int controller_run(app_runtime_t *runtime) {
 
         bool sdk_failed = false;
         while (runtime->sdk_active && mybot_is_running()) {
-            mybot_event_t event;
-            if (mybot_event_wait(&event, CONTROLLER_POLL_MS) == 0) {
-                handle_button_event(runtime, &event);
-            }
+            controller_wait_for_button(runtime);
             update_network_state(runtime);
             log_state_transition(&last_state, &state_valid);
             if (mybot_get_state() == MYBOT_STATE_FAILED) {
