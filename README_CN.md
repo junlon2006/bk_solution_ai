@@ -119,6 +119,10 @@ projects/beken_robot/build/bk7259/beken_robot/package/all-app.bin
 
 编译命令的详细说明请参阅 [快速入门](https://docs.bekencorp.com/arminodoc/bk_ai_smp/bk7259/zh_CN/v4.0.1/get-started/index.html)。
 
+BK7259 MyBot 组件绑定仓库内的 RTSA 1278380 版本，其定时粒度固定为 60 ms。组件 CMake
+配置会拒绝 `MYBOT_AUDIO_PTIME_MS` 的其他取值；如需 20/40 ms，必须先准备经过验证的对应
+RTSA 软件包并同步更新组件配置。
+
 ## 烧录固件
 
 可选择以下任一方式烧录固件：
