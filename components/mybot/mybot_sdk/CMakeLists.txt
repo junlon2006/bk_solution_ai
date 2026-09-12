@@ -16,8 +16,10 @@ set(MYBOT_AUDIO_PTIME_MS "60")
 if(DEFINED ENV{MYBOT_AUDIO_PTIME_MS} AND NOT "$ENV{MYBOT_AUDIO_PTIME_MS}" STREQUAL "")
     set(MYBOT_AUDIO_PTIME_MS "$ENV{MYBOT_AUDIO_PTIME_MS}")
 endif()
-if(NOT MYBOT_AUDIO_PTIME_MS MATCHES "^(20|40|60)$")
-    message(FATAL_ERROR "MYBOT_AUDIO_PTIME_MS must be 20, 40, or 60")
+if(NOT MYBOT_AUDIO_PTIME_MS STREQUAL "60")
+    message(FATAL_ERROR
+        "BK7259 RTSA package build 1278380 is fixed at 60 ms; "
+        "MYBOT_AUDIO_PTIME_MS must be 60")
 endif()
 
 set(_rtsa_header_sha256

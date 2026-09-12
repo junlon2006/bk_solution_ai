@@ -119,6 +119,10 @@ projects/beken_robot/build/bk7259/beken_robot/package/all-app.bin
 
 For detailed build commands, see [Quick Start](https://docs.bekencorp.com/arminodoc/bk_ai_smp/bk7259/en/v4.0.1/get-started/index.html).
 
+The BK7259 MyBot component is paired with the vendored RTSA build 1278380, whose timer cadence is
+fixed at 60 ms. Its CMake configuration rejects `MYBOT_AUDIO_PTIME_MS` values other than 60; a
+20/40 ms build requires a separately validated RTSA package and corresponding component update.
+
 ## Flash the Firmware
 
 You can flash the firmware using either of the following methods:
