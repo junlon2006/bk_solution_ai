@@ -7,6 +7,7 @@
 #include <common/bk_err.h>
 #include <components/bk_display.h>
 #include <components/bk_frame_buffer.h>
+#include <api/aosl_atomic.h>
 #include "bk7259_platform_log.h"
 #include <driver/gpio.h>
 #include <gpio_driver.h>
@@ -54,7 +55,7 @@ typedef struct {
     bk_avdk_lcd_panel_handle_t panel;
     bk_display_ctlr_handle_t controller;
     uint16_t *frames[LCD_FRAME_COUNT];
-    uint32_t frame_busy[LCD_FRAME_COUNT];
+    aosl_atomic_t frame_busy[LCD_FRAME_COUNT];
     beken_semaphore_t frame_done;
     unsigned int next_frame;
     bool vddio_owned;
@@ -302,7 +303,96 @@ static const char *screen_label(mybot_lcd_screen_t screen)
     return NULL;
 }
 
-static void draw_state_icon(uint16_t *frame, mybot_lcd_screen_t screen, uint16_t color)
+static mybot_lcd_indicator_t server_indicator(uint32_t indicators)
+{
+    /* The SDK guarantees mutual exclusion. Keep a stable precedence for a
+     * malformed bitmask received from an older/custom caller. */
+    if (indicators & MYBOT_LCD_INDICATOR_LISTENING) {
+        return MYBOT_LCD_INDICATOR_LISTENING;
+    }
+    if (indicators & MYBOT_LCD_INDICATOR_THINKING) {
+        return MYBOT_LCD_INDICATOR_THINKING;
+    }
+    if (indicators & MYBOT_LCD_INDICATOR_SPEAKING) {
+        return MYBOT_LCD_INDICATOR_SPEAKING;
+    }
+    return MYBOT_LCD_INDICATOR_NONE;
+}
+
+static uint16_t server_indicator_color(mybot_lcd_indicator_t indicator)
+{
+    switch (indicator) {
+    case MYBOT_LCD_INDICATOR_LISTENING:
+        return COLOR_CYAN;
+    case MYBOT_LCD_INDICATOR_THINKING:
+        return COLOR_AMBER;
+    case MYBOT_LCD_INDICATOR_SPEAKING:
+        return COLOR_GREEN;
+    case MYBOT_LCD_INDICATOR_NONE:
+    case MYBOT_LCD_INDICATOR_VP_REGISTERED:
+        return COLOR_CYAN;
+    }
+    return COLOR_CYAN;
+}
+
+static const char *server_indicator_label(mybot_lcd_indicator_t indicator)
+{
+    switch (indicator) {
+    case MYBOT_LCD_INDICATOR_LISTENING:
+        return "LISTENING";
+    case MYBOT_LCD_INDICATOR_THINKING:
+        return "THINKING";
+    case MYBOT_LCD_INDICATOR_SPEAKING:
+        return "SPEAKING";
+    case MYBOT_LCD_INDICATOR_NONE:
+    case MYBOT_LCD_INDICATOR_VP_REGISTERED:
+        return "TALKING";
+    }
+    return "TALKING";
+}
+
+static void draw_server_state_icon(uint16_t *frame, mybot_lcd_indicator_t indicator,
+                                   uint16_t color)
+{
+    const int center_x = LCD_LOGICAL_WIDTH / 2;
+    const int center_y = 118;
+
+    draw_ring(frame, center_x, center_y, 70, 5, color);
+    switch (indicator) {
+    case MYBOT_LCD_INDICATOR_LISTENING:
+        /* Microphone capsule and pickup arc. */
+        fill_rect(frame, center_x - 12, center_y - 38, 24, 52, color);
+        draw_ring(frame, center_x, center_y + 11, 30, 5, color);
+        draw_line(frame, center_x - 30, center_y + 11, center_x + 30, center_y + 11, 5, color);
+        draw_line(frame, center_x, center_y + 11, center_x, center_y + 35, 5, color);
+        break;
+    case MYBOT_LCD_INDICATOR_THINKING:
+        /* Three dots make the server-side processing phase legible without a
+         * timer or animation in the real-time LCD path. */
+        draw_disc(frame, center_x - 30, center_y, 10, color);
+        draw_disc(frame, center_x, center_y, 10, color);
+        draw_disc(frame, center_x + 30, center_y, 10, color);
+        break;
+    case MYBOT_LCD_INDICATOR_SPEAKING:
+        /* Speaker body with two outward sound-wave strokes. */
+        fill_rect(frame, center_x - 38, center_y - 13, 13, 26, color);
+        fill_rect(frame, center_x - 25, center_y - 27, 13, 54, color);
+        draw_line(frame, center_x + 5, center_y - 25, center_x + 26, center_y - 38, 5, color);
+        draw_line(frame, center_x + 5, center_y + 25, center_x + 26, center_y + 38, 5, color);
+        draw_line(frame, center_x + 15, center_y - 40, center_x + 42, center_y - 52, 4, color);
+        draw_line(frame, center_x + 15, center_y + 40, center_x + 42, center_y + 52, 4, color);
+        break;
+    case MYBOT_LCD_INDICATOR_NONE:
+    case MYBOT_LCD_INDICATOR_VP_REGISTERED:
+        fill_rect(frame, center_x - 39, center_y - 23, 12, 46, color);
+        fill_rect(frame, center_x - 6, center_y - 40, 12, 80, color);
+        fill_rect(frame, center_x + 27, center_y - 23, 12, 46, color);
+        break;
+    }
+}
+
+static void draw_state_icon(uint16_t *frame, mybot_lcd_screen_t screen, uint16_t color,
+                            mybot_lcd_indicator_t indicator)
 {
     const int center_x = LCD_LOGICAL_WIDTH / 2;
     const int center_y = 118;
@@ -333,9 +423,7 @@ static void draw_state_icon(uint16_t *frame, mybot_lcd_screen_t screen, uint16_t
                   color);
         break;
     case MYBOT_LCD_SCREEN_IN_CONVERSATION:
-        fill_rect(frame, center_x - 39, center_y - 23, 12, 46, color);
-        fill_rect(frame, center_x - 6, center_y - 40, 12, 80, color);
-        fill_rect(frame, center_x + 27, center_y - 23, 12, 46, color);
+        draw_server_state_icon(frame, indicator, color);
         break;
     case MYBOT_LCD_SCREEN_STOPPING:
         fill_rect(frame, center_x - 35, center_y - 5, 70, 10, color);
@@ -420,7 +508,13 @@ static int render_content(uint16_t *frame, const mybot_lcd_content_t *content)
     }
 
     uint16_t color = screen_color(content->screen);
-    draw_state_icon(frame, content->screen, color);
+    mybot_lcd_indicator_t indicator = MYBOT_LCD_INDICATOR_NONE;
+    if (content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION) {
+        indicator = server_indicator(content->indicators);
+        color = server_indicator_color(indicator);
+        label = server_indicator_label(indicator);
+    }
+    draw_state_icon(frame, content->screen, color, indicator);
     draw_text_centered(frame, 235, label, strlen(label), 4, color);
     if (content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION) {
         draw_voiceprint_overlay(
@@ -434,7 +528,7 @@ static void release_frame(unsigned int index)
     if (index >= LCD_FRAME_COUNT) {
         return;
     }
-    if (__atomic_exchange_n(&s_lcd.frame_busy[index], 0, __ATOMIC_ACQ_REL) != 0 &&
+    if (aosl_atomic_xchg(&s_lcd.frame_busy[index], 0) != 0 &&
         s_lcd.frame_done) {
         (void)rtos_set_semaphore(&s_lcd.frame_done);
     }
@@ -458,7 +552,7 @@ static int wait_for_frame(unsigned int *out_index)
     for (;;) {
         for (unsigned int offset = 0; offset < LCD_FRAME_COUNT; ++offset) {
             unsigned int index = (s_lcd.next_frame + offset) % LCD_FRAME_COUNT;
-            if (__atomic_load_n(&s_lcd.frame_busy[index], __ATOMIC_ACQUIRE) == 0) {
+            if (aosl_atomic_read(&s_lcd.frame_busy[index]) == 0) {
                 *out_index = index;
                 return 0;
             }
@@ -481,7 +575,7 @@ static int submit_content_locked(const mybot_lcd_content_t *content)
         return -1;
     }
 
-    __atomic_store_n(&s_lcd.frame_busy[index], 1, __ATOMIC_RELEASE);
+    aosl_atomic_set(&s_lcd.frame_busy[index], 1);
     avdk_err_t result =
         bk_display_flush(s_lcd.controller, s_lcd.frames[index], frame_release_callback);
     if (result != AVDK_ERR_OK) {
@@ -639,7 +733,7 @@ static int teardown_locked(void)
 
     /* display_deinit returns both the current and update buffers via the callback. */
     for (unsigned int index = 0; index < LCD_FRAME_COUNT; ++index) {
-        __atomic_store_n(&s_lcd.frame_busy[index], 0, __ATOMIC_RELEASE);
+        aosl_atomic_set(&s_lcd.frame_busy[index], 0);
         if (s_lcd.frames[index]) {
             bk_frame_buffer_free(s_lcd.frames[index]);
             s_lcd.frames[index] = NULL;

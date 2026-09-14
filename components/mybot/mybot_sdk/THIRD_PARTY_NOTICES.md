@@ -4,7 +4,7 @@
 
 The sources under `include/` and `src/` are an unmodified snapshot of
 https://github.com/junlon2006/mybot at commit
-`27324e7177b52ad9d8743aba31acf94d0a125f44`. They are provided under the
+`db65e90ee4073bbeb4cede1ebe7132dce7773abd`. They are provided under the
 Apache License 2.0 in `LICENSE`, except where a source file states otherwise.
 
 `src/support/mybot_json.c` and `src/internal/mybot_json.h` are namespaced
