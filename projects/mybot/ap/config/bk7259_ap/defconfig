@@ -5,6 +5,10 @@
 CONFIG_TASK_STACK_IN_PSRAM=y
 CONFIG_QUEUE_IN_PSRAM=y
 CONFIG_FREERTOS_POSIX=y
+# RTSA, AOSL MPQ and FreeRTOS POSIX objects share the BK7259 dynamic
+# spinlock pool. Keep enough entries for the concurrent RTC/audio control
+# paths instead of inheriting the 160-entry SDK default.
+CONFIG_SPINLOCK_DYNAMIC_CNT=512
 
 # MyBot owns a small APSTA portal built from public Wi-Fi and netif APIs.
 # CONFIG_BK_NETWORK_PROVISIONING is not set
