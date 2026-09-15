@@ -141,7 +141,8 @@ int app_isp_camera_turn_off(void)
 
     avdk_err_t ret = AVDK_ERR_OK;
 
-    if (bk_isp_camera_channel_state_get(isp_cam_handle.camera_ctlr_handle, ISP_SP_CHN_ID) == ISP_CHANNEL_STATE_TURN_ON)
+    if (isp_cam_handle.camera_ctlr_handle != NULL
+        && bk_isp_camera_channel_state_get(isp_cam_handle.camera_ctlr_handle, ISP_SP_CHN_ID) == ISP_CHANNEL_STATE_TURN_ON)
     {
         ret = bk_isp_camera_channel_close(isp_cam_handle.camera_ctlr_handle, ISP_SP_CHN_ID);
         if (ret != AVDK_ERR_OK)
@@ -151,7 +152,8 @@ int app_isp_camera_turn_off(void)
         }
     }
 
-    if (bk_isp_camera_channel_state_get(isp_cam_handle.camera_ctlr_handle, ISP_MP_CHN_ID) == ISP_CHANNEL_STATE_TURN_ON)
+    if (isp_cam_handle.camera_ctlr_handle != NULL
+        && bk_isp_camera_channel_state_get(isp_cam_handle.camera_ctlr_handle, ISP_MP_CHN_ID) == ISP_CHANNEL_STATE_TURN_ON)
     {
         ret = bk_isp_camera_channel_close(isp_cam_handle.camera_ctlr_handle, ISP_MP_CHN_ID);
         if (ret != AVDK_ERR_OK)
@@ -358,18 +360,39 @@ static int app_isp_mipi_sensor_turn_on(const camera_board_config_t *config, bk_i
     AVDK_GOTO_ON_ERROR(bk_camera_sensor_query_support_formats(isp_cam_handle.sensor_handle, &format_array), err, TAG, "bk_camera_sensor_query_support_formats failed");
     AVDK_GOTO_ON_FALSE(format_array.size > 0, AVDK_ERR_INVAL, err, TAG, "format array size is 0");
 
-    int detect_index = 0;
-    for (detect_index = 0; detect_index < format_array.size; detect_index++)
+    int detect_index = -1;
+    for (int i = 0; i < (int)format_array.size; i++)
     {
-        if (format_array.format_array[detect_index].width == config->mipi.sensor_max_width
-            && format_array.format_array[detect_index].height == config->mipi.sensor_max_height
-            && format_array.format_array[detect_index].fps == config->mipi.sensor_fps)
+        if (format_array.format_array[i].width == config->mipi.sensor_max_width
+            && format_array.format_array[i].height == config->mipi.sensor_max_height
+            && format_array.format_array[i].fps == config->mipi.sensor_fps)
         {
+            detect_index = i;
             break;
         }
     }
 
-    if (detect_index >= format_array.size)
+    /* GC2053/CV2005 can program arbitrary frame rates in their supported
+     * range, while the static mode table lists only common rates.  Keep the
+     * requested FPS for sensor_set_format(); use any same-size mode solely to
+     * obtain the ISP Bayer pixel format when an exact table entry is absent. */
+    if (detect_index < 0)
+    {
+        for (int i = 0; i < (int)format_array.size; i++)
+        {
+            if (format_array.format_array[i].width == config->mipi.sensor_max_width
+                && format_array.format_array[i].height == config->mipi.sensor_max_height)
+            {
+                detect_index = i;
+                LOGW("no exact sensor mode for %ux%u@%u; using listed @%u pixel format\n",
+                     config->mipi.sensor_max_width, config->mipi.sensor_max_height,
+                     config->mipi.sensor_fps, format_array.format_array[i].fps);
+                break;
+            }
+        }
+    }
+
+    if (detect_index < 0)
     {
         LOGE("not found matching sensor format\n");
         ret = AVDK_ERR_INVAL;

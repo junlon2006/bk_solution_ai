@@ -1,5 +1,56 @@
 menu "MyBot BK7259 platform"
 
+    config MYBOT_VIDEO
+        bool "Enable MyBot encoded video uplink"
+        default n
+        depends on ISP && MIPI_CSI && CSI_CAMERA && (CSI_GC2053 || CSI_CV2005) && BK_ENCODER
+        depends on MULTIMEDIA_DEVICE_SERVICE && MULTIMEDIA_H264_ENCODE
+        help
+            Capture the BK7259 MIPI CSI camera and upload complete H.264
+            access units through the MyBot RTC session.
+
+    config MYBOT_VIDEO_WIDTH
+        int "MyBot video width"
+        range 16 1280
+        default 640
+        depends on MYBOT_VIDEO
+
+    config MYBOT_VIDEO_HEIGHT
+        int "MyBot video height"
+        range 16 720
+        default 480
+        depends on MYBOT_VIDEO
+
+    config MYBOT_VIDEO_SENSOR_WIDTH
+        int "MyBot MIPI sensor width"
+        range 16 2000
+        default 1280
+        depends on MYBOT_VIDEO
+
+    config MYBOT_VIDEO_SENSOR_HEIGHT
+        int "MyBot MIPI sensor height"
+        range 16 1200
+        default 720
+        depends on MYBOT_VIDEO
+
+    config MYBOT_VIDEO_SENSOR_FPS
+        int "MyBot MIPI sensor frame rate"
+        range 1 60
+        default 10
+        depends on MYBOT_VIDEO
+
+    config MYBOT_VIDEO_MIN_BPS
+        int "MyBot minimum video bitrate"
+        range 1 10000000
+        default 256000
+        depends on MYBOT_VIDEO
+
+    config MYBOT_VIDEO_MAX_BPS
+        int "MyBot maximum video bitrate"
+        range 1 10000000
+        default 512000
+        depends on MYBOT_VIDEO
+
     choice MYBOT_LANGUAGE
         prompt "MyBot device language"
         default MYBOT_LANGUAGE_ZH_CN

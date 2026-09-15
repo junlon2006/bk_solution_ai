@@ -95,6 +95,38 @@ set(platform_srcs
     platforms/bk7259/bk7259_https.c
 )
 
+if(CONFIG_MYBOT_VIDEO)
+    list(APPEND platform_srcs platforms/bk7259/bk7259_video.c)
+endif()
+
+set(mybot_priv_requires
+    mybot_aosl
+    audio_pipeline
+    onboard_mic_stream
+    onboard_speaker_stream
+    raw_stream
+    aec_v3_algorithm
+    bk_display
+    media_service
+    bk_frame_buffer
+    bk_peripheral
+    bk_pm
+    easy_flash
+    adc_key
+    bk_event
+    bk_wifi
+    bk_netif
+    json
+    psa_mbedtls
+    lwip_intf_v2_1
+    bk_common
+    bk_rtos
+    bk_libs
+)
+if(CONFIG_MYBOT_VIDEO)
+    list(APPEND mybot_priv_requires multimedia_device_service)
+endif()
+
 armino_component_register(
     SRCS "${sdk_srcs}" "${platform_srcs}"
     INCLUDE_DIRS
@@ -105,30 +137,10 @@ armino_component_register(
         src/internal
         "${_rtsa_sdk_dir}/include"
         platforms/bk7259
-    PRIV_REQUIRES
-        mybot_aosl
-        audio_pipeline
-        onboard_mic_stream
-        onboard_speaker_stream
-        raw_stream
-        aec_v3_algorithm
-        bk_display
-        media_service
-        bk_frame_buffer
-        bk_peripheral
-        bk_pm
-        easy_flash
-        adc_key
-        bk_event
-        bk_wifi
-        bk_netif
-        json
-        psa_mbedtls
-        lwip_intf_v2_1
-        bk_common
-        bk_rtos
-        # BK7259 bk_libs supplies the validated Ogg/Opus decoder archives.
-        bk_libs
+        # app_camera/app_codec are solution-owned video helper headers.  Keep
+        # this private so the public MyBot include surface stays platform-only.
+        "${CMAKE_CURRENT_LIST_DIR}/../../multimedia_device_service/include"
+    PRIV_REQUIRES ${mybot_priv_requires}
 )
 
 add_prebuilt_library(mybot_rtsa "${_rtsa_library}" PRIV_REQUIRES mybot_aosl)
@@ -146,7 +158,7 @@ target_compile_definitions(${COMPONENT_LIB}
         MYBOT_AUDIO_PTIME_MS=${MYBOT_AUDIO_PTIME_MS}
         MYBOT_CLOUD_AEC=0
         MYBOT_WAKE_WORDS=0
-        MYBOT_ENABLE_VIDEO=0
+        MYBOT_ENABLE_VIDEO=$<BOOL:${CONFIG_MYBOT_VIDEO}>
         MYBOT_AI_QOS=1
         MYBOT_FAST_SEND_MULTIPLIER=3
         MYBOT_ENABLE_HTTPS=1

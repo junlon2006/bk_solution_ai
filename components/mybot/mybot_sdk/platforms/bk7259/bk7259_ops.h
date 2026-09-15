@@ -10,6 +10,7 @@
 #include <mybot/platform/mybot_key.h>
 #include <mybot/platform/mybot_kv_store.h>
 #include <mybot/platform/mybot_lcd.h>
+#include <mybot/platform/mybot_video.h>
 #include <mybot/platform/mybot_wifi.h>
 
 extern const mybot_audio_capture_ops_t g_mybot_bk7259_capture_ops;
@@ -20,6 +21,7 @@ extern const mybot_https_ops_t g_mybot_bk7259_https_ops;
 extern const mybot_key_ops_t g_mybot_bk7259_key_ops;
 extern const mybot_kv_store_ops_t g_mybot_bk7259_kv_ops;
 extern const mybot_lcd_ops_t g_mybot_bk7259_lcd_ops;
+extern const mybot_video_ops_t g_mybot_bk7259_video_ops;
 extern const mybot_wifi_ops_t g_mybot_bk7259_wifi_ops;
 
 int bk7259_key_prepare(void);

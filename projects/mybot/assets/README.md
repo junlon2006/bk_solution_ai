@@ -54,8 +54,8 @@ Linux mybot demo（文档标注为同一 `xiaozhi-esp32` 资源的衍生）。�
      的 `sound_file_name()`（对应 `mybot_announce_sound_t` 枚举）。
 3. 执行 `make -C projects/mybot bk7259 SDK_DIR=...` 并烧录。
 
-语言在 `MyBot BK7259 platform` 的 Kconfig choice 中选择。中文默认使用
-`https://mybot.sh2.agoralab.co/api`，英文使用
+语言在 `MyBot BK7259 platform` 的 Kconfig choice 中选择。中文临时使用
+`https://botstation.sh3t.agoralab.co/api`，英文使用
 `https://mybot.sg3.agoralab.co/api`；服务器地址由该 choice 派生，不能与内嵌语音标签错配。
 
 ## 固件空间

@@ -63,6 +63,11 @@ int mybot_bk7259_platform_register(void) {
         .https = &g_mybot_bk7259_https_ops,
         .lcd = &g_mybot_bk7259_lcd_ops,
         .announce = &g_mybot_bk7259_announce_ops,
+#if defined(CONFIG_MYBOT_VIDEO) && CONFIG_MYBOT_VIDEO
+        .video = &g_mybot_bk7259_video_ops,
+#else
+        .video = NULL,
+#endif
         .wake_words = NULL,
     };
 

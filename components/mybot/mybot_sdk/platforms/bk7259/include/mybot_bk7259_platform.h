@@ -12,7 +12,9 @@
 #define MYBOT_SERVER_BASE "https://mybot.sg3.agoralab.co/api"
 #else
 #define MYBOT_LANGUAGE_TAG "zh-CN"
-#define MYBOT_SERVER_BASE "https://mybot.sh2.agoralab.co/api"
+/* Temporary domestic test environment. The /api prefix is part of the test
+ * service route used by the device client. */
+#define MYBOT_SERVER_BASE "https://botstation.sh3t.agoralab.co/api"
 #endif
 
 #define MYBOT_ASSETS_DIR "mybot/assets"
