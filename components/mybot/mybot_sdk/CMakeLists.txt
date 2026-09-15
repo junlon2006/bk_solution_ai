@@ -43,10 +43,10 @@ if(NOT _actual_library_sha256 STREQUAL _rtsa_library_sha256)
 endif()
 
 set(MYBOT_VERSION_MAJOR 1)
-set(MYBOT_VERSION_MINOR 0)
+set(MYBOT_VERSION_MINOR 2)
 set(MYBOT_VERSION_PATCH 0)
 set(MYBOT_VERSION_PRERELEASE "")
-set(MYBOT_VERSION_STRING "1.0.0")
+set(MYBOT_VERSION_STRING "1.2.0")
 set(_generated_include_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 file(MAKE_DIRECTORY "${_generated_include_dir}/mybot")
 configure_file(
@@ -63,6 +63,7 @@ set(sdk_srcs
     src/core/mybot_version.c
     src/media/mybot_audio.c
     src/media/mybot_media_pipeline.c
+    src/media/mybot_video.c
     src/media/mybot_wake_words.c
     src/platform/mybot_announce.c
     src/platform/mybot_https.c
@@ -145,6 +146,7 @@ target_compile_definitions(${COMPONENT_LIB}
         MYBOT_AUDIO_PTIME_MS=${MYBOT_AUDIO_PTIME_MS}
         MYBOT_CLOUD_AEC=0
         MYBOT_WAKE_WORDS=0
+        MYBOT_ENABLE_VIDEO=0
         MYBOT_AI_QOS=1
         MYBOT_FAST_SEND_MULTIPLIER=3
         MYBOT_ENABLE_HTTPS=1
