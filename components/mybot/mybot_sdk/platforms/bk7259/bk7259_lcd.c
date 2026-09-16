@@ -292,7 +292,7 @@ static const char *screen_label(mybot_lcd_screen_t screen)
     case MYBOT_LCD_SCREEN_READY:
         return "READY";
     case MYBOT_LCD_SCREEN_IN_CONVERSATION:
-        return "TALKING";
+        return "CONVERSATION";
     case MYBOT_LCD_SCREEN_FAILED:
         return "FAILED";
     case MYBOT_LCD_SCREEN_STOPPING:
@@ -335,64 +335,50 @@ static uint16_t server_indicator_color(mybot_lcd_indicator_t indicator)
     return COLOR_CYAN;
 }
 
-static const char *server_indicator_label(mybot_lcd_indicator_t indicator)
+static void draw_server_state_overlay(uint16_t *frame, mybot_lcd_indicator_t indicator)
 {
-    switch (indicator) {
-    case MYBOT_LCD_INDICATOR_LISTENING:
-        return "LISTENING";
-    case MYBOT_LCD_INDICATOR_THINKING:
-        return "THINKING";
-    case MYBOT_LCD_INDICATOR_SPEAKING:
-        return "SPEAKING";
-    case MYBOT_LCD_INDICATOR_NONE:
-    case MYBOT_LCD_INDICATOR_VP_REGISTERED:
-        return "TALKING";
+    const int center_x = LCD_LOGICAL_WIDTH / 2 - 53;
+    const int center_y = 66;
+
+    if (indicator == MYBOT_LCD_INDICATOR_NONE ||
+        indicator == MYBOT_LCD_INDICATOR_VP_REGISTERED) {
+        return;
     }
-    return "TALKING";
-}
 
-static void draw_server_state_icon(uint16_t *frame, mybot_lcd_indicator_t indicator,
-                                   uint16_t color)
-{
-    const int center_x = LCD_LOGICAL_WIDTH / 2;
-    const int center_y = 118;
-
-    draw_ring(frame, center_x, center_y, 70, 5, color);
+    draw_disc(frame, center_x, center_y, 17, server_indicator_color(indicator));
     switch (indicator) {
     case MYBOT_LCD_INDICATOR_LISTENING:
-        /* Microphone capsule and pickup arc. */
-        fill_rect(frame, center_x - 12, center_y - 38, 24, 52, color);
-        draw_ring(frame, center_x, center_y + 11, 30, 5, color);
-        draw_line(frame, center_x - 30, center_y + 11, center_x + 30, center_y + 11, 5, color);
-        draw_line(frame, center_x, center_y + 11, center_x, center_y + 35, 5, color);
+        fill_rect(frame, center_x - 3, center_y - 9, 6, 12, COLOR_BLACK);
+        draw_line(frame, center_x - 7, center_y - 1, center_x - 7, center_y + 3, 2,
+                  COLOR_BLACK);
+        draw_line(frame, center_x - 7, center_y + 3, center_x, center_y + 7, 2, COLOR_BLACK);
+        draw_line(frame, center_x, center_y + 7, center_x + 7, center_y + 3, 2, COLOR_BLACK);
+        draw_line(frame, center_x + 7, center_y + 3, center_x + 7, center_y - 1, 2,
+                  COLOR_BLACK);
+        draw_line(frame, center_x, center_y + 7, center_x, center_y + 11, 2, COLOR_BLACK);
         break;
     case MYBOT_LCD_INDICATOR_THINKING:
-        /* Three dots make the server-side processing phase legible without a
-         * timer or animation in the real-time LCD path. */
-        draw_disc(frame, center_x - 30, center_y, 10, color);
-        draw_disc(frame, center_x, center_y, 10, color);
-        draw_disc(frame, center_x + 30, center_y, 10, color);
+        draw_disc(frame, center_x - 8, center_y, 3, COLOR_BLACK);
+        draw_disc(frame, center_x, center_y, 3, COLOR_BLACK);
+        draw_disc(frame, center_x + 8, center_y, 3, COLOR_BLACK);
         break;
     case MYBOT_LCD_INDICATOR_SPEAKING:
-        /* Speaker body with two outward sound-wave strokes. */
-        fill_rect(frame, center_x - 38, center_y - 13, 13, 26, color);
-        fill_rect(frame, center_x - 25, center_y - 27, 13, 54, color);
-        draw_line(frame, center_x + 5, center_y - 25, center_x + 26, center_y - 38, 5, color);
-        draw_line(frame, center_x + 5, center_y + 25, center_x + 26, center_y + 38, 5, color);
-        draw_line(frame, center_x + 15, center_y - 40, center_x + 42, center_y - 52, 4, color);
-        draw_line(frame, center_x + 15, center_y + 40, center_x + 42, center_y + 52, 4, color);
+        fill_rect(frame, center_x - 10, center_y - 4, 5, 8, COLOR_BLACK);
+        draw_line(frame, center_x - 5, center_y - 4, center_x, center_y - 8, 3, COLOR_BLACK);
+        draw_line(frame, center_x - 5, center_y + 4, center_x, center_y + 8, 3, COLOR_BLACK);
+        draw_line(frame, center_x, center_y - 8, center_x, center_y + 8, 3, COLOR_BLACK);
+        draw_line(frame, center_x + 5, center_y - 5, center_x + 9, center_y - 9, 2,
+                  COLOR_BLACK);
+        draw_line(frame, center_x + 5, center_y + 5, center_x + 9, center_y + 9, 2,
+                  COLOR_BLACK);
         break;
     case MYBOT_LCD_INDICATOR_NONE:
     case MYBOT_LCD_INDICATOR_VP_REGISTERED:
-        fill_rect(frame, center_x - 39, center_y - 23, 12, 46, color);
-        fill_rect(frame, center_x - 6, center_y - 40, 12, 80, color);
-        fill_rect(frame, center_x + 27, center_y - 23, 12, 46, color);
         break;
     }
 }
 
-static void draw_state_icon(uint16_t *frame, mybot_lcd_screen_t screen, uint16_t color,
-                            mybot_lcd_indicator_t indicator)
+static void draw_state_icon(uint16_t *frame, mybot_lcd_screen_t screen, uint16_t color)
 {
     const int center_x = LCD_LOGICAL_WIDTH / 2;
     const int center_y = 118;
@@ -423,7 +409,9 @@ static void draw_state_icon(uint16_t *frame, mybot_lcd_screen_t screen, uint16_t
                   color);
         break;
     case MYBOT_LCD_SCREEN_IN_CONVERSATION:
-        draw_server_state_icon(frame, indicator, color);
+        fill_rect(frame, center_x - 39, center_y - 23, 12, 46, color);
+        fill_rect(frame, center_x - 6, center_y - 40, 12, 80, color);
+        fill_rect(frame, center_x + 27, center_y - 23, 12, 46, color);
         break;
     case MYBOT_LCD_SCREEN_STOPPING:
         fill_rect(frame, center_x - 35, center_y - 5, 70, 10, color);
@@ -508,15 +496,10 @@ static int render_content(uint16_t *frame, const mybot_lcd_content_t *content)
     }
 
     uint16_t color = screen_color(content->screen);
-    mybot_lcd_indicator_t indicator = MYBOT_LCD_INDICATOR_NONE;
-    if (content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION) {
-        indicator = server_indicator(content->indicators);
-        color = server_indicator_color(indicator);
-        label = server_indicator_label(indicator);
-    }
-    draw_state_icon(frame, content->screen, color, indicator);
+    draw_state_icon(frame, content->screen, color);
     draw_text_centered(frame, 235, label, strlen(label), 4, color);
     if (content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION) {
+        draw_server_state_overlay(frame, server_indicator(content->indicators));
         draw_voiceprint_overlay(
             frame, (content->indicators & MYBOT_LCD_INDICATOR_VP_REGISTERED) != 0);
     }
