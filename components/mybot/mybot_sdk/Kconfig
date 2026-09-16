@@ -36,7 +36,7 @@ menu "MyBot BK7259 platform"
     config MYBOT_VIDEO_SENSOR_FPS
         int "MyBot MIPI sensor frame rate"
         range 1 60
-        default 10
+        default 5
         depends on MYBOT_VIDEO
 
     config MYBOT_VIDEO_MIN_BPS
