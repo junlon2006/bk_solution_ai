@@ -2,10 +2,11 @@
 
 ## MyBot SDK
 
-The sources under `include/` and `src/` are an unmodified snapshot of
+The sources under `include/` and `src/` are based on a snapshot of
 https://github.com/junlon2006/mybot at commit
-`1baee9a61ddaa4c4b7b72406fa6c8a0503f4b61d`. They are provided under the
-Apache License 2.0 in `LICENSE`, except where a source file states otherwise.
+`1baee9a61ddaa4c4b7b72406fa6c8a0503f4b61d`, with target patches recorded in
+`SDK_REVISION`. They are provided under the Apache License 2.0 in `LICENSE`,
+except where a source file states otherwise.
 
 `src/support/mybot_json.c` and `src/internal/mybot_json.h` are namespaced
 derivatives of cJSON. Their MIT license and Dave Gamble copyright notice are

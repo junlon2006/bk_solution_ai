@@ -138,6 +138,7 @@ RTSA 软件包并同步更新组件配置。
 
 | 工程名 | 主要功能 | 详细说明 |
 | --- | --- | --- |
+| [mybot](projects/mybot/) | 基于 Agora RTSA 的 MyBot 多模态对话固件，支持全双工音频和 BK7259 MIPI CSI / 硬件 H.264 视频上行。 | [工程说明](projects/mybot/README_CN.md) |
 | [beken_robot](../projects/beken_robot/) | LCD / LVGL 显示、本地语音唤醒、声源定位、AI 语音与视觉对话、BLE 配网、NPU 视觉识别、多传感器与外设控制、Wi-Fi 图传、SD NAND 存储等。 | [详细说明及使用说明在线文档](https://docs.bekencorp.com/arminodoc/bk_ai_smp/bk7259/zh_CN/v4.0.1/projects/beken_robot/index.html) |
 | [secureboot_ai](../projects/secureboot_ai/) | 在机器人 AI 应用栈上集成 BL1、BL2/MCUboot、TF-M、镜像签名和 Flash AES 的安全启动参考工程。 | [详细说明及使用说明在线文档](https://docs.bekencorp.com/arminodoc/bk_ai_smp/bk7259/zh_CN/v4.0.1/projects/secureboot_ai/index.html) |
 | [baf_example](../projects/baf_example/) | BAF 动画播放示例：RAW/LVGL 后端、固件内置与 TF 卡 ``.baf`` 多层合成播放。 | [详细说明及使用说明在线文档](https://docs.bekencorp.com/arminodoc/bk_ai_smp/bk7259/zh_CN/v4.0.1/projects/baf_example/index.html) |
