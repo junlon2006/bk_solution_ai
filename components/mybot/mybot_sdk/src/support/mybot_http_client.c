@@ -11,6 +11,7 @@
 #include <hal/aosl_hal_errno.h>
 
 #include <api/aosl_socket.h>
+#include <api/aosl_log.h>
 
 #include <string.h>
 #include <stdio.h>
@@ -869,6 +870,9 @@ static int http_request(const char *method, const char *url, const char *content
     }
 
     /* Send the request. */
+    if (parts.use_tls) {
+        AOSL_LOG_NTC("[HTTPS] request len=%d:\n%.*s", req_len, req_len, req);
+    }
     int ret = send_all(&stream, req, (size_t)req_len, deadline);
     aosl_hal_free(req);
     if (ret < 0) {
@@ -883,7 +887,14 @@ static int http_request(const char *method, const char *url, const char *content
     stream_close(&stream);
 
     if (!raw) {
+        if (parts.use_tls) {
+            AOSL_LOG_ERR("[HTTPS] response unavailable");
+        }
         return -1;
+    }
+
+    if (parts.use_tls) {
+        AOSL_LOG_NTC("[HTTPS] response len=%zu:\n%.*s", raw_len, (int)raw_len, raw);
     }
 
     /* Parse the response. */
