@@ -30,6 +30,9 @@
 #define LCD_FRAME_BYTES (LCD_NATIVE_WIDTH * LCD_NATIVE_HEIGHT * LCD_BYTES_PER_PIXEL)
 #define LCD_FRAME_COUNT 2
 #define LCD_RENDER_TIMEOUT_MS 250
+#define LCD_LABEL_BASELINE_Y 261
+#define LCD_PAIR_LABEL_BASELINE_Y 82
+#define LCD_PAIR_CODE_BASELINE_Y 208
 
 #define LCD_POWER_GPIO GPIO_53
 #define LCD_RESET_GPIO GPIO_5
@@ -79,52 +82,24 @@ static const bk_display_dpu_config_t s_controller_config = {
     },
 };
 
-/* Adapted from the Apache-2.0 MyBot ESP32 display implementation. */
-static const uint8_t s_digits[10][5] = {
-    {0x3e, 0x51, 0x49, 0x45, 0x3e}, {0x00, 0x42, 0x7f, 0x40, 0x00},
-    {0x42, 0x61, 0x51, 0x49, 0x46}, {0x21, 0x41, 0x45, 0x4b, 0x31},
-    {0x18, 0x14, 0x12, 0x7f, 0x10}, {0x27, 0x45, 0x45, 0x45, 0x39},
-    {0x3c, 0x4a, 0x49, 0x49, 0x30}, {0x01, 0x71, 0x09, 0x05, 0x03},
-    {0x36, 0x49, 0x49, 0x49, 0x36}, {0x06, 0x49, 0x49, 0x29, 0x1e},
-};
+typedef struct {
+    uint16_t data_offset;
+    uint8_t character;
+    uint8_t width;
+    uint8_t height;
+    uint8_t advance;
+    int8_t x_offset;
+    int8_t y_offset;
+} lcd_font_glyph_t;
 
-static const uint8_t s_letters[26][5] = {
-    {0x7e, 0x11, 0x11, 0x11, 0x7e},
-    {0x7f, 0x49, 0x49, 0x49, 0x36}, {0x3e, 0x41, 0x41, 0x41, 0x22},
-    {0x7f, 0x41, 0x41, 0x22, 0x1c}, {0x7f, 0x49, 0x49, 0x49, 0x41},
-    {0x7f, 0x09, 0x09, 0x09, 0x01}, {0x3e, 0x41, 0x49, 0x49, 0x7a},
-    {0x7f, 0x08, 0x08, 0x08, 0x7f}, {0x00, 0x41, 0x7f, 0x41, 0x00},
-    {0x20, 0x40, 0x41, 0x3f, 0x01}, {0x7f, 0x08, 0x14, 0x22, 0x41},
-    {0x7f, 0x40, 0x40, 0x40, 0x40}, {0x7f, 0x02, 0x0c, 0x02, 0x7f},
-    {0x7f, 0x04, 0x08, 0x10, 0x7f}, {0x3e, 0x41, 0x41, 0x41, 0x3e},
-    {0x7f, 0x09, 0x09, 0x09, 0x06}, {0x3e, 0x41, 0x51, 0x21, 0x5e},
-    {0x7f, 0x09, 0x19, 0x29, 0x46}, {0x46, 0x49, 0x49, 0x49, 0x31},
-    {0x01, 0x01, 0x7f, 0x01, 0x01}, {0x3f, 0x40, 0x40, 0x40, 0x3f},
-    {0x1f, 0x20, 0x40, 0x20, 0x1f}, {0x3f, 0x40, 0x38, 0x40, 0x3f},
-    {0x63, 0x14, 0x08, 0x14, 0x63}, {0x07, 0x08, 0x70, 0x08, 0x07},
-    {0x61, 0x51, 0x49, 0x45, 0x43},
-};
+typedef struct {
+    const uint8_t *bitmap;
+    const lcd_font_glyph_t *glyphs;
+    size_t glyph_count;
+    uint8_t tracking;
+} lcd_font_t;
 
-static const uint8_t *glyph_for(char character)
-{
-    static const uint8_t space[5] = {0};
-    static const uint8_t dash[5] = {0x08, 0x08, 0x08, 0x08, 0x08};
-    static const uint8_t question[5] = {0x02, 0x01, 0x51, 0x09, 0x06};
-
-    if (character >= '0' && character <= '9') {
-        return s_digits[character - '0'];
-    }
-    if (character >= 'A' && character <= 'Z') {
-        return s_letters[character - 'A'];
-    }
-    if (character == ' ') {
-        return space;
-    }
-    if (character == '-') {
-        return dash;
-    }
-    return question;
-}
+#include "bk7259_lcd_font.inc"
 
 static bool ensure_lcd_lock(void)
 {
@@ -134,16 +109,44 @@ static bool ensure_lcd_lock(void)
     return rtos_init_mutex(&s_lcd_lock) == BK_OK;
 }
 
-static void put_pixel(uint16_t *frame, int x, int y, uint16_t color)
+static uint16_t *pixel_address(uint16_t *frame, int x, int y)
 {
     if (!frame || x < 0 || x >= LCD_LOGICAL_WIDTH || y < 0 || y >= LCD_LOGICAL_HEIGHT) {
-        return;
+        return NULL;
     }
 
     /* AVDK ROTATE_90 is a 270-degree buffer rotation into the native panel. */
     int native_x = y;
     int native_y = LCD_LOGICAL_WIDTH - x - 1;
-    frame[(size_t)native_y * LCD_NATIVE_WIDTH + (size_t)native_x] = color;
+    return &frame[(size_t)native_y * LCD_NATIVE_WIDTH + (size_t)native_x];
+}
+
+static void blend_pixel(uint16_t *frame, int x, int y, uint16_t color, uint8_t alpha)
+{
+    if (alpha == 0) {
+        return;
+    }
+
+    uint16_t *pixel = pixel_address(frame, x, y);
+    if (!pixel) {
+        return;
+    }
+    if (alpha == 255) {
+        *pixel = color;
+        return;
+    }
+
+    uint32_t inverse = 255U - alpha;
+    uint32_t red = ((((color >> 11) & 0x1fU) * alpha + ((*pixel >> 11) & 0x1fU) * inverse +
+                     127U) /
+                    255U)
+                   << 11;
+    uint32_t green = ((((color >> 5) & 0x3fU) * alpha + ((*pixel >> 5) & 0x3fU) * inverse +
+                       127U) /
+                      255U)
+                     << 5;
+    uint32_t blue = ((color & 0x1fU) * alpha + (*pixel & 0x1fU) * inverse + 127U) / 255U;
+    *pixel = (uint16_t)(red | green | blue);
 }
 
 static void fill_screen(uint16_t *frame, uint16_t color)
@@ -153,37 +156,127 @@ static void fill_screen(uint16_t *frame, uint16_t color)
     }
 }
 
-static void fill_rect(uint16_t *frame, int x, int y, int width, int height, uint16_t color)
+static bool point_in_capsule(int point_x8, int point_y8, int start_x8, int start_y8,
+                             int end_x8, int end_y8, int radius_squared)
 {
-    for (int row = 0; row < height; ++row) {
-        for (int column = 0; column < width; ++column) {
-            put_pixel(frame, x + column, y + row, color);
-        }
+    int vector_x = end_x8 - start_x8;
+    int vector_y = end_y8 - start_y8;
+    int point_vector_x = point_x8 - start_x8;
+    int point_vector_y = point_y8 - start_y8;
+    int length_squared = vector_x * vector_x + vector_y * vector_y;
+    int projection = point_vector_x * vector_x + point_vector_y * vector_y;
+
+    if (projection <= 0 || length_squared == 0) {
+        return point_vector_x * point_vector_x + point_vector_y * point_vector_y <=
+               radius_squared;
     }
+    if (projection >= length_squared) {
+        int end_dx = point_x8 - end_x8;
+        int end_dy = point_y8 - end_y8;
+        return end_dx * end_dx + end_dy * end_dy <= radius_squared;
+    }
+
+    int64_t cross = (int64_t)point_vector_x * vector_y -
+                    (int64_t)point_vector_y * vector_x;
+    return cross * cross <= (int64_t)radius_squared * length_squared;
 }
 
 static void draw_line(uint16_t *frame, int x0, int y0, int x1, int y1, int thickness,
                       uint16_t color)
 {
-    int dx = x1 > x0 ? x1 - x0 : x0 - x1;
-    int sx = x0 < x1 ? 1 : -1;
-    int dy = y1 > y0 ? y0 - y1 : y1 - y0;
-    int sy = y0 < y1 ? 1 : -1;
-    int error = dx + dy;
+    static const int sample_offsets[4] = {-3, -1, 1, 3};
+    if (!frame || thickness <= 0) {
+        return;
+    }
 
-    for (;;) {
-        fill_rect(frame, x0 - thickness / 2, y0 - thickness / 2, thickness, thickness, color);
-        if (x0 == x1 && y0 == y1) {
-            return;
+    int padding = (thickness + 1) / 2 + 1;
+    int min_x = (x0 < x1 ? x0 : x1) - padding;
+    int max_x = (x0 > x1 ? x0 : x1) + padding;
+    int min_y = (y0 < y1 ? y0 : y1) - padding;
+    int max_y = (y0 > y1 ? y0 : y1) + padding;
+    if (min_x < 0) {
+        min_x = 0;
+    }
+    if (max_x >= LCD_LOGICAL_WIDTH) {
+        max_x = LCD_LOGICAL_WIDTH - 1;
+    }
+    if (min_y < 0) {
+        min_y = 0;
+    }
+    if (max_y >= LCD_LOGICAL_HEIGHT) {
+        max_y = LCD_LOGICAL_HEIGHT - 1;
+    }
+
+    int start_x8 = x0 * 8;
+    int start_y8 = y0 * 8;
+    int end_x8 = x1 * 8;
+    int end_y8 = y1 * 8;
+    int radius8 = thickness * 4;
+    int radius_squared = radius8 * radius8;
+
+    for (int y = min_y; y <= max_y; ++y) {
+        for (int x = min_x; x <= max_x; ++x) {
+            unsigned int covered = 0;
+            for (size_t sample_y = 0; sample_y < 4; ++sample_y) {
+                int point_y8 = y * 8 + sample_offsets[sample_y];
+                for (size_t sample_x = 0; sample_x < 4; ++sample_x) {
+                    int point_x8 = x * 8 + sample_offsets[sample_x];
+                    if (point_in_capsule(point_x8, point_y8, start_x8, start_y8, end_x8,
+                                         end_y8, radius_squared)) {
+                        ++covered;
+                    }
+                }
+            }
+            blend_pixel(frame, x, y, color, (uint8_t)((covered * 255U + 8U) >> 4));
         }
-        int doubled = error * 2;
-        if (doubled >= dy) {
-            error += dy;
-            x0 += sx;
-        }
-        if (doubled <= dx) {
-            error += dx;
-            y0 += sy;
+    }
+}
+
+static void draw_radial(uint16_t *frame, int center_x, int center_y, int inner_radius,
+                        int outer_radius, uint16_t color)
+{
+    static const int sample_offsets[4] = {-3, -1, 1, 3};
+    if (!frame || outer_radius <= 0) {
+        return;
+    }
+
+    int min_x = center_x - outer_radius;
+    int max_x = center_x + outer_radius;
+    int min_y = center_y - outer_radius;
+    int max_y = center_y + outer_radius;
+    if (min_x < 0) {
+        min_x = 0;
+    }
+    if (max_x >= LCD_LOGICAL_WIDTH) {
+        max_x = LCD_LOGICAL_WIDTH - 1;
+    }
+    if (min_y < 0) {
+        min_y = 0;
+    }
+    if (max_y >= LCD_LOGICAL_HEIGHT) {
+        max_y = LCD_LOGICAL_HEIGHT - 1;
+    }
+
+    int outer8 = outer_radius * 8;
+    int outer_squared = outer8 * outer8;
+    int inner8 = inner_radius > 0 ? inner_radius * 8 : 0;
+    int inner_squared = inner8 * inner8;
+
+    for (int y = min_y; y <= max_y; ++y) {
+        for (int x = min_x; x <= max_x; ++x) {
+            unsigned int covered = 0;
+            for (size_t sample_y = 0; sample_y < 4; ++sample_y) {
+                int dy8 = (y - center_y) * 8 + sample_offsets[sample_y];
+                for (size_t sample_x = 0; sample_x < 4; ++sample_x) {
+                    int dx8 = (x - center_x) * 8 + sample_offsets[sample_x];
+                    int distance_squared = dx8 * dx8 + dy8 * dy8;
+                    if (distance_squared <= outer_squared &&
+                        (inner_radius <= 0 || distance_squared >= inner_squared)) {
+                        ++covered;
+                    }
+                }
+            }
+            blend_pixel(frame, x, y, color, (uint8_t)((covered * 255U + 8U) >> 4));
         }
     }
 }
@@ -191,59 +284,91 @@ static void draw_line(uint16_t *frame, int x0, int y0, int x1, int y1, int thick
 static void draw_ring(uint16_t *frame, int center_x, int center_y, int radius, int thickness,
                       uint16_t color)
 {
-    int outer_squared = radius * radius;
     int inner_radius = radius - thickness;
-    int inner_squared = inner_radius * inner_radius;
-
-    for (int y = center_y - radius; y <= center_y + radius; ++y) {
-        for (int x = center_x - radius; x <= center_x + radius; ++x) {
-            int dx = x - center_x;
-            int dy = y - center_y;
-            int distance = dx * dx + dy * dy;
-            if (distance <= outer_squared && distance >= inner_squared) {
-                put_pixel(frame, x, y, color);
-            }
-        }
-    }
+    draw_radial(frame, center_x, center_y, inner_radius > 0 ? inner_radius : 0, radius, color);
 }
 
 static void draw_disc(uint16_t *frame, int center_x, int center_y, int radius, uint16_t color)
 {
-    int radius_squared = radius * radius;
-
-    for (int y = center_y - radius; y <= center_y + radius; ++y) {
-        for (int x = center_x - radius; x <= center_x + radius; ++x) {
-            int dx = x - center_x;
-            int dy = y - center_y;
-            if (dx * dx + dy * dy <= radius_squared) {
-                put_pixel(frame, x, y, color);
-            }
-        }
-    }
+    draw_radial(frame, center_x, center_y, 0, radius, color);
 }
 
-static void draw_character(uint16_t *frame, int x, int y, char character, int scale,
+static const lcd_font_glyph_t *font_glyph(const lcd_font_t *font, char character)
+{
+    if (!font) {
+        return NULL;
+    }
+
+    const lcd_font_glyph_t *fallback = NULL;
+    for (size_t index = 0; index < font->glyph_count; ++index) {
+        if (font->glyphs[index].character == (uint8_t)character) {
+            return &font->glyphs[index];
+        }
+        if (font->glyphs[index].character == '?') {
+            fallback = &font->glyphs[index];
+        }
+    }
+    return fallback;
+}
+
+static int text_width(const lcd_font_t *font, const char *text, size_t length)
+{
+    int width = 0;
+    size_t glyphs = 0;
+
+    for (size_t index = 0; index < length; ++index) {
+        const lcd_font_glyph_t *glyph = font_glyph(font, text[index]);
+        if (!glyph) {
+            continue;
+        }
+        if (glyphs != 0) {
+            width += font->tracking;
+        }
+        width += glyph->advance;
+        ++glyphs;
+    }
+    return width;
+}
+
+static void draw_character(uint16_t *frame, int x, int baseline_y,
+                           const lcd_font_t *font, const lcd_font_glyph_t *glyph,
                            uint16_t color)
 {
-    const uint8_t *glyph = glyph_for(character);
+    if (!frame || !font || !glyph) {
+        return;
+    }
 
-    for (int column = 0; column < 5; ++column) {
-        for (int row = 0; row < 7; ++row) {
-            if (glyph[column] & (1u << row)) {
-                fill_rect(frame, x + column * scale, y + row * scale, scale, scale, color);
-            }
+    size_t stride = ((size_t)glyph->width + 1U) / 2U;
+    const uint8_t *bitmap = font->bitmap + glyph->data_offset;
+    for (uint8_t row = 0; row < glyph->height; ++row) {
+        const uint8_t *bitmap_row = bitmap + (size_t)row * stride;
+        for (uint8_t column = 0; column < glyph->width; ++column) {
+            uint8_t packed = bitmap_row[column / 2U];
+            uint8_t coverage = (column & 1U) == 0 ? packed >> 4 : packed & 0x0fU;
+            blend_pixel(frame, x + glyph->x_offset + column,
+                        baseline_y + glyph->y_offset + row, color,
+                        (uint8_t)(coverage * 17U));
         }
     }
 }
 
-static void draw_text_centered(uint16_t *frame, int y, const char *text, size_t length, int scale,
-                               uint16_t color)
+static void draw_text_centered(uint16_t *frame, int baseline_y, const char *text, size_t length,
+                               const lcd_font_t *font, uint16_t color)
 {
-    int width = length == 0 ? 0 : ((int)length * 6 - 1) * scale;
-    int x = (LCD_LOGICAL_WIDTH - width) / 2;
+    int pen_x = (LCD_LOGICAL_WIDTH - text_width(font, text, length)) / 2;
+    size_t glyphs = 0;
 
-    for (size_t i = 0; i < length; ++i) {
-        draw_character(frame, x + (int)i * 6 * scale, y, text[i], scale, color);
+    for (size_t index = 0; index < length; ++index) {
+        const lcd_font_glyph_t *glyph = font_glyph(font, text[index]);
+        if (!glyph) {
+            continue;
+        }
+        if (glyphs != 0) {
+            pen_x += font->tracking;
+        }
+        draw_character(frame, pen_x, baseline_y, font, glyph, color);
+        pen_x += glyph->advance;
+        ++glyphs;
     }
 }
 
@@ -348,7 +473,7 @@ static void draw_server_state_overlay(uint16_t *frame, mybot_lcd_indicator_t ind
     draw_disc(frame, center_x, center_y, 17, server_indicator_color(indicator));
     switch (indicator) {
     case MYBOT_LCD_INDICATOR_LISTENING:
-        fill_rect(frame, center_x - 3, center_y - 9, 6, 12, COLOR_BLACK);
+        draw_line(frame, center_x, center_y - 6, center_x, center_y + 1, 6, COLOR_BLACK);
         draw_line(frame, center_x - 7, center_y - 1, center_x - 7, center_y + 3, 2,
                   COLOR_BLACK);
         draw_line(frame, center_x - 7, center_y + 3, center_x, center_y + 7, 2, COLOR_BLACK);
@@ -363,7 +488,8 @@ static void draw_server_state_overlay(uint16_t *frame, mybot_lcd_indicator_t ind
         draw_disc(frame, center_x + 8, center_y, 3, COLOR_BLACK);
         break;
     case MYBOT_LCD_INDICATOR_SPEAKING:
-        fill_rect(frame, center_x - 10, center_y - 4, 5, 8, COLOR_BLACK);
+        draw_line(frame, center_x - 8, center_y - 3, center_x - 8, center_y + 3, 5,
+                  COLOR_BLACK);
         draw_line(frame, center_x - 5, center_y - 4, center_x, center_y - 8, 3, COLOR_BLACK);
         draw_line(frame, center_x - 5, center_y + 4, center_x, center_y + 8, 3, COLOR_BLACK);
         draw_line(frame, center_x, center_y - 8, center_x, center_y + 8, 3, COLOR_BLACK);
@@ -409,12 +535,14 @@ static void draw_state_icon(uint16_t *frame, mybot_lcd_screen_t screen, uint16_t
                   color);
         break;
     case MYBOT_LCD_SCREEN_IN_CONVERSATION:
-        fill_rect(frame, center_x - 39, center_y - 23, 12, 46, color);
-        fill_rect(frame, center_x - 6, center_y - 40, 12, 80, color);
-        fill_rect(frame, center_x + 27, center_y - 23, 12, 46, color);
+        draw_line(frame, center_x - 33, center_y - 17, center_x - 33, center_y + 17, 12,
+                  color);
+        draw_line(frame, center_x, center_y - 34, center_x, center_y + 34, 12, color);
+        draw_line(frame, center_x + 33, center_y - 17, center_x + 33, center_y + 17, 12,
+                  color);
         break;
     case MYBOT_LCD_SCREEN_STOPPING:
-        fill_rect(frame, center_x - 35, center_y - 5, 70, 10, color);
+        draw_line(frame, center_x - 30, center_y, center_x + 30, center_y, 10, color);
         break;
     case MYBOT_LCD_SCREEN_PAIR_CODE:
     case MYBOT_LCD_SCREEN_COUNT:
@@ -485,19 +613,17 @@ static int render_content(uint16_t *frame, const mybot_lcd_content_t *content)
         if (pair_code_length(content->pair_code, &code_length) < 0) {
             return -1;
         }
-        int scale = 8;
-        while ((((int)code_length * 6 - 1) * scale > LCD_LOGICAL_WIDTH - 24) && scale > 1) {
-            --scale;
-        }
-        draw_text_centered(frame, 56, label, strlen(label), 4, COLOR_CYAN);
-        draw_text_centered(frame, (LCD_LOGICAL_HEIGHT - 7 * scale) / 2 + 22,
-                           content->pair_code, code_length, scale, COLOR_WHITE);
+        draw_text_centered(frame, LCD_PAIR_LABEL_BASELINE_Y, label, strlen(label),
+                           &s_ui_label_font, COLOR_CYAN);
+        draw_text_centered(frame, LCD_PAIR_CODE_BASELINE_Y, content->pair_code, code_length,
+                           &s_ui_digit_font, COLOR_WHITE);
         return 0;
     }
 
     uint16_t color = screen_color(content->screen);
     draw_state_icon(frame, content->screen, color);
-    draw_text_centered(frame, 235, label, strlen(label), 4, color);
+    draw_text_centered(frame, LCD_LABEL_BASELINE_Y, label, strlen(label), &s_ui_label_font,
+                       color);
     if (content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION) {
         draw_server_state_overlay(frame, server_indicator(content->indicators));
         draw_voiceprint_overlay(

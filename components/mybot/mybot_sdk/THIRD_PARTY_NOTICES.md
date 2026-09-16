@@ -12,10 +12,13 @@ except where a source file states otherwise.
 derivatives of cJSON. Their MIT license and Dave Gamble copyright notice are
 retained in those files.
 
-The compact digit and uppercase glyphs in
-`platforms/bk7259/bk7259_lcd.c` are adapted from the Apache-2.0 MyBot ESP32
-display implementation at https://github.com/junlon2006/mybot-esp32, commit
-`c8687315522f640683acda7d8dccbe5e40c9050b`.
+The 4-bit UI glyph coverage in
+`platforms/bk7259/bk7259_lcd_font.inc` is generated from Liberation Sans
+2.1.5 in the pinned BK7259 AVDK tree. The source TTF has SHA256
+`3e81ba4717a115f8d125cd2327d4a1246be2997b9ffd7291a45b6f84ed1a27d1`.
+The derived data is identified internally as the MyBot UI font and does not
+use the reserved font name as its name. It remains under the SIL Open Font
+License 1.1 in `platforms/bk7259/OFL-1.1.txt`.
 
 The embedded Chinese and English Ogg/Opus prompt assets under
 `projects/mybot/assets/` are derived from the MIT-licensed `xiaozhi-esp32`
