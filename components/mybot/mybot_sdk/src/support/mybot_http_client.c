@@ -871,7 +871,9 @@ static int http_request(const char *method, const char *url, const char *content
 
     /* Send the request. */
     if (parts.use_tls) {
-        AOSL_LOG_NTC("[HTTPS] request len=%d:\n%.*s", req_len, req_len, req);
+        const char *body = req_body ? req_body : "";
+        size_t body_len = strlen(body);
+        AOSL_LOG_NTC("[HTTPS] request body len=%zu:\n%.*s", body_len, (int)body_len, body);
     }
     int ret = send_all(&stream, req, (size_t)req_len, deadline);
     aosl_hal_free(req);
@@ -893,13 +895,14 @@ static int http_request(const char *method, const char *url, const char *content
         return -1;
     }
 
-    if (parts.use_tls) {
-        AOSL_LOG_NTC("[HTTPS] response len=%zu:\n%.*s", raw_len, (int)raw_len, raw);
-    }
-
     /* Parse the response. */
     ret = parse_response(raw, raw_len, stream_closed, resp);
     aosl_hal_free(raw);
+
+    if (parts.use_tls && ret == 0) {
+        AOSL_LOG_NTC("[HTTPS] response body len=%zu:\n%.*s", resp->body_len,
+                     (int)resp->body_len, resp->body ? resp->body : "");
+    }
 
     return ret;
 }
