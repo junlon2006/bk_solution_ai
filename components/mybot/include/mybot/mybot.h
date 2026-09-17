@@ -72,11 +72,11 @@ typedef enum {
      *  setup, the active session, and normal conversation teardown until the
      *  device lifecycle returns to MYBOT_STATE_READY. If runtime connectivity
      *  is lost, MYBOT_STATE_WIFI_DISCONNECTED takes precedence while offline. */
-    MYBOT_STATE_IN_CONVERSATION = 7,
+    MYBOT_STATE_IN_CONVERSATION,
     /** The device service is unprovisioned, requesting a pairing code, or
      *  waiting for the device to be claimed. Conversation start is not
      *  available until the device reaches MYBOT_STATE_READY. */
-    MYBOT_STATE_PAIRING = 8,
+    MYBOT_STATE_PAIRING,
 } mybot_state_t;
 
 /**
@@ -100,6 +100,8 @@ typedef enum {
  * - With MYBOT_ENABLE_HTTPS=ON, a "https://" server requires a TLS transport in the registered
  *   platform descriptor; plain "http://" is rejected
  *   unless MYBOT_ALLOW_INSECURE_HTTP=ON is set for development builds.
+ * - With MYBOT_ENABLE_VIDEO=ON, the registered platform descriptor must provide encoded video
+ *   operations and the selected RTSA package must include video support.
  *
  * The configuration is validated (non-NULL cfg, NUL-terminated strings,
  * non-empty server_base / device_id, supported URL scheme). Calling

@@ -9,12 +9,20 @@
 #include <mybot/platform/mybot_key.h>
 #include <mybot/platform/mybot_kv_store.h>
 #include <mybot/platform/mybot_lcd.h>
+#include <mybot/platform/mybot_video.h>
 #include <mybot/platform/mybot_wake_words.h>
 #include <mybot/platform/mybot_wifi.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* ----------------------------------------------------------
+ * Process-wide platform registration
+ *
+ * A platform collects its operation tables in one descriptor and
+ * registers that descriptor before starting the SDK.
+ * ---------------------------------------------------------- */
 
 /**
  * Process-wide platform implementation.
@@ -46,6 +54,8 @@ typedef struct {
     const mybot_lcd_ops_t *lcd;
     /** Optional announcement operations. */
     const mybot_announce_ops_t *announce;
+    /** Optional encoded video capture and encoder operations (required when video is enabled). */
+    const mybot_video_ops_t *video;
     /** Optional wake-word operations. */
     const mybot_wake_words_ops_t *wake_words;
 } mybot_platform_descriptor_t;
@@ -56,10 +66,10 @@ typedef struct {
  * The call either commits the complete descriptor or leaves the registry unchanged.
  * One successful registration is allowed and must happen before mybot_start().
  *
- * @param descriptor complete descriptor satisfying mybot_platform_descriptor_t's operations and
- *                   lifetime contract
- * @return 0 on success; -1 if the descriptor is NULL or invalid, any registration
- *         already succeeded
+ * @param descriptor complete descriptor satisfying the operation and lifetime
+ *                   contracts of mybot_platform_descriptor_t
+ * @return 0 on success; -1 if descriptor is NULL or invalid, or if a
+ *         registration has already succeeded
  */
 MYBOT_API int mybot_platform_register(const mybot_platform_descriptor_t *descriptor);
 

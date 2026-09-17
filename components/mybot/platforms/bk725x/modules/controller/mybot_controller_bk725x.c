@@ -78,6 +78,8 @@ static const char *controller_state_name(mybot_state_t state) {
         return "starting_services";
     case MYBOT_STATE_READY:
         return "ready";
+    case MYBOT_STATE_PAIRING:
+        return "pairing";
     case MYBOT_STATE_WIFI_DISCONNECTED:
         return "wifi_disconnected";
     case MYBOT_STATE_FAILED:
