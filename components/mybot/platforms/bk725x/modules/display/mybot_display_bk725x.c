@@ -25,6 +25,12 @@
 #define DISPLAY_PANEL_SIZE (DISPLAY_WIDTH * DISPLAY_HEIGHT * DISPLAY_BYTES_PER_PIXEL)
 #define DISPLAY_FRAME_SIZE (DISPLAY_PANEL_SIZE * DISPLAY_COUNT)
 
+/* Keep both badges inside the circular panel, including their AA edge. */
+#define DISPLAY_BADGE_LEFT_X 40
+#define DISPLAY_BADGE_RIGHT_X (DISPLAY_WIDTH - DISPLAY_BADGE_LEFT_X)
+#define DISPLAY_BADGE_Y 36
+#define DISPLAY_BADGE_RADIUS 14
+
 #define DISPLAY_BACKLIGHT_GPIO GPIO_25
 #define DISPLAY_THREAD_PRIORITY 2
 #define DISPLAY_THREAD_STACK_SIZE 4096
@@ -151,74 +157,251 @@ static void fill_rect(uint8_t *pixels, int x, int y, int width, int height, uint
     }
 }
 
-static void draw_line(uint8_t *pixels, int x0, int y0, int x1, int y1, int thickness,
-                      uint16_t color) {
-    int dx = x1 > x0 ? x1 - x0 : x0 - x1;
-    int sx = x0 < x1 ? 1 : -1;
-    int dy = y1 > y0 ? y0 - y1 : y1 - y0;
-    int sy = y0 < y1 ? 1 : -1;
-    int error = dx + dy;
+/* Coverage rasterization adapted from the BK7259 MyBot LCD renderer
+ * (platforms/bk7259/bk7259_lcd.c, Apache-2.0).
+ * Keep BK7258 SPI RGB565 pixels in their existing high-byte-first order. */
+static void blend_pixel(uint8_t *pixels, int x, int y, uint16_t color, uint8_t alpha) {
+    if (!pixels || alpha == 0 || x < 0 || x >= DISPLAY_WIDTH ||
+        y < 0 || y >= DISPLAY_HEIGHT) {
+        return;
+    }
+    size_t offset = ((size_t)y * DISPLAY_WIDTH + (size_t)x) * DISPLAY_BYTES_PER_PIXEL;
+    uint16_t background = ((uint16_t)pixels[offset] << 8) | pixels[offset + 1];
+    uint32_t inverse = 255U - alpha;
+    uint32_t red = (((color >> 11) & 31U) * alpha +
+                    ((background >> 11) & 31U) * inverse + 127U) / 255U;
+    uint32_t green = (((color >> 5) & 63U) * alpha +
+                      ((background >> 5) & 63U) * inverse + 127U) / 255U;
+    uint32_t blue = ((color & 31U) * alpha + (background & 31U) * inverse + 127U) / 255U;
+    put_pixel(pixels, x, y, (uint16_t)((red << 11) | (green << 5) | blue));
+}
 
-    for (;;) {
-        fill_rect(pixels, x0 - thickness / 2, y0 - thickness / 2, thickness, thickness,
-                  color);
-        if (x0 == x1 && y0 == y1) {
-            break;
+static bool point_in_capsule(int point_x8, int point_y8, int start_x8, int start_y8,
+                             int end_x8, int end_y8, int radius_squared)
+{
+    int vector_x = end_x8 - start_x8;
+    int vector_y = end_y8 - start_y8;
+    int point_vector_x = point_x8 - start_x8;
+    int point_vector_y = point_y8 - start_y8;
+    int length_squared = vector_x * vector_x + vector_y * vector_y;
+    int projection = point_vector_x * vector_x + point_vector_y * vector_y;
+
+    if (projection <= 0 || length_squared == 0) {
+        return point_vector_x * point_vector_x + point_vector_y * point_vector_y <=
+               radius_squared;
+    }
+    if (projection >= length_squared) {
+        int end_dx = point_x8 - end_x8;
+        int end_dy = point_y8 - end_y8;
+        return end_dx * end_dx + end_dy * end_dy <= radius_squared;
+    }
+
+    int64_t cross = (int64_t)point_vector_x * vector_y -
+                    (int64_t)point_vector_y * vector_x;
+    return cross * cross <= (int64_t)radius_squared * length_squared;
+}
+
+static void draw_line(uint8_t *pixels, int x0, int y0, int x1, int y1, int thickness,
+                      uint16_t color)
+{
+    static const int sample_offsets[4] = {-3, -1, 1, 3};
+    if (!pixels || thickness <= 0) {
+        return;
+    }
+
+    int padding = (thickness + 1) / 2 + 1;
+    int min_x = (x0 < x1 ? x0 : x1) - padding;
+    int max_x = (x0 > x1 ? x0 : x1) + padding;
+    int min_y = (y0 < y1 ? y0 : y1) - padding;
+    int max_y = (y0 > y1 ? y0 : y1) + padding;
+    if (min_x < 0) {
+        min_x = 0;
+    }
+    if (max_x >= DISPLAY_WIDTH) {
+        max_x = DISPLAY_WIDTH - 1;
+    }
+    if (min_y < 0) {
+        min_y = 0;
+    }
+    if (max_y >= DISPLAY_HEIGHT) {
+        max_y = DISPLAY_HEIGHT - 1;
+    }
+
+    int start_x8 = x0 * 8;
+    int start_y8 = y0 * 8;
+    int end_x8 = x1 * 8;
+    int end_y8 = y1 * 8;
+    int radius8 = thickness * 4;
+    int radius_squared = radius8 * radius8;
+
+    for (int y = min_y; y <= max_y; ++y) {
+        for (int x = min_x; x <= max_x; ++x) {
+            unsigned int covered = 0;
+            for (size_t sample_y = 0; sample_y < 4; ++sample_y) {
+                int point_y8 = y * 8 + sample_offsets[sample_y];
+                for (size_t sample_x = 0; sample_x < 4; ++sample_x) {
+                    int point_x8 = x * 8 + sample_offsets[sample_x];
+                    if (point_in_capsule(point_x8, point_y8, start_x8, start_y8, end_x8,
+                                         end_y8, radius_squared)) {
+                        ++covered;
+                    }
+                }
+            }
+            blend_pixel(pixels, x, y, color, (uint8_t)((covered * 255U + 8U) >> 4));
         }
-        int doubled = error * 2;
-        if (doubled >= dy) {
-            error += dy;
-            x0 += sx;
-        }
-        if (doubled <= dx) {
-            error += dx;
-            y0 += sy;
+    }
+}
+
+static void draw_radial(uint8_t *pixels, int center_x, int center_y, int inner_radius,
+                        int outer_radius, uint16_t color)
+{
+    static const int sample_offsets[4] = {-3, -1, 1, 3};
+    if (!pixels || outer_radius <= 0) {
+        return;
+    }
+
+    int min_x = center_x - outer_radius;
+    int max_x = center_x + outer_radius;
+    int min_y = center_y - outer_radius;
+    int max_y = center_y + outer_radius;
+    if (min_x < 0) {
+        min_x = 0;
+    }
+    if (max_x >= DISPLAY_WIDTH) {
+        max_x = DISPLAY_WIDTH - 1;
+    }
+    if (min_y < 0) {
+        min_y = 0;
+    }
+    if (max_y >= DISPLAY_HEIGHT) {
+        max_y = DISPLAY_HEIGHT - 1;
+    }
+
+    int outer8 = outer_radius * 8;
+    int outer_squared = outer8 * outer8;
+    int inner8 = inner_radius > 0 ? inner_radius * 8 : 0;
+    int inner_squared = inner8 * inner8;
+
+    for (int y = min_y; y <= max_y; ++y) {
+        for (int x = min_x; x <= max_x; ++x) {
+            unsigned int covered = 0;
+            for (size_t sample_y = 0; sample_y < 4; ++sample_y) {
+                int dy8 = (y - center_y) * 8 + sample_offsets[sample_y];
+                for (size_t sample_x = 0; sample_x < 4; ++sample_x) {
+                    int dx8 = (x - center_x) * 8 + sample_offsets[sample_x];
+                    int distance_squared = dx8 * dx8 + dy8 * dy8;
+                    if (distance_squared <= outer_squared &&
+                        (inner_radius <= 0 || distance_squared >= inner_squared)) {
+                        ++covered;
+                    }
+                }
+            }
+            blend_pixel(pixels, x, y, color, (uint8_t)((covered * 255U + 8U) >> 4));
         }
     }
 }
 
 static void draw_ring(uint8_t *pixels, int radius, int thickness, uint16_t color) {
-    const int center = DISPLAY_WIDTH / 2;
-    int outer_squared = radius * radius;
-    int inner_radius = radius - thickness;
-    int inner_squared = inner_radius * inner_radius;
-
-    for (int y = center - radius; y <= center + radius; ++y) {
-        for (int x = center - radius; x <= center + radius; ++x) {
-            int dx = x - center;
-            int dy = y - center;
-            int distance = dx * dx + dy * dy;
-            if (distance <= outer_squared && distance >= inner_squared) {
-                put_pixel(pixels, x, y, color);
-            }
-        }
-    }
+    draw_radial(pixels, DISPLAY_WIDTH / 2, DISPLAY_HEIGHT / 2,
+                radius - thickness, radius, color);
 }
 
 static void draw_circle(uint8_t *pixels, int center_x, int center_y, int radius,
                         uint16_t color) {
-    int radius_squared = radius * radius;
-    for (int y = center_y - radius; y <= center_y + radius; ++y) {
-        for (int x = center_x - radius; x <= center_x + radius; ++x) {
-            int dx = x - center_x;
-            int dy = y - center_y;
-            if (dx * dx + dy * dy <= radius_squared) {
-                put_pixel(pixels, x, y, color);
-            }
-        }
-    }
+    draw_radial(pixels, center_x, center_y, 0, radius, color);
 }
 
 static void draw_vp_indicator(uint8_t *pixels) {
-    draw_circle(pixels, 124, 28, 14, COLOR_GREEN);
-    draw_line(pixels, 116, 28, 122, 34, 3, COLOR_WHITE);
-    draw_line(pixels, 122, 34, 133, 21, 3, COLOR_WHITE);
+    const int x = DISPLAY_BADGE_RIGHT_X;
+    const int y = DISPLAY_BADGE_Y;
+    draw_circle(pixels, x, y, DISPLAY_BADGE_RADIUS, COLOR_GREEN);
+    draw_line(pixels, x - 8, y, x - 2, y + 6, 3, COLOR_WHITE);
+    draw_line(pixels, x - 2, y + 6, x + 9, y - 7, 3, COLOR_WHITE);
 }
 
 static void draw_vp_pending_indicator(uint8_t *pixels) {
-    draw_circle(pixels, 124, 28, 14, COLOR_RED);
-    draw_line(pixels, 117, 21, 131, 35, 3, COLOR_WHITE);
-    draw_line(pixels, 131, 21, 117, 35, 3, COLOR_WHITE);
+    const int x = DISPLAY_BADGE_RIGHT_X;
+    const int y = DISPLAY_BADGE_Y;
+    draw_circle(pixels, x, y, DISPLAY_BADGE_RADIUS, COLOR_RED);
+    draw_line(pixels, x - 7, y - 7, x + 7, y + 7, 3, COLOR_WHITE);
+    draw_line(pixels, x + 7, y - 7, x - 7, y + 7, 3, COLOR_WHITE);
+}
+
+static mybot_lcd_indicator_t server_indicator(uint32_t indicators)
+{
+    /* The SDK guarantees mutual exclusion. Keep a stable precedence for a
+     * malformed bitmask received from an older/custom caller. */
+    if (indicators & MYBOT_LCD_INDICATOR_LISTENING) {
+        return MYBOT_LCD_INDICATOR_LISTENING;
+    }
+    if (indicators & MYBOT_LCD_INDICATOR_THINKING) {
+        return MYBOT_LCD_INDICATOR_THINKING;
+    }
+    if (indicators & MYBOT_LCD_INDICATOR_SPEAKING) {
+        return MYBOT_LCD_INDICATOR_SPEAKING;
+    }
+    return MYBOT_LCD_INDICATOR_NONE;
+}
+
+static uint16_t server_indicator_color(mybot_lcd_indicator_t indicator)
+{
+    switch (indicator) {
+    case MYBOT_LCD_INDICATOR_LISTENING:
+        return COLOR_CYAN;
+    case MYBOT_LCD_INDICATOR_THINKING:
+        return COLOR_AMBER;
+    case MYBOT_LCD_INDICATOR_SPEAKING:
+        return COLOR_GREEN;
+    case MYBOT_LCD_INDICATOR_NONE:
+    case MYBOT_LCD_INDICATOR_VP_REGISTERED:
+        return COLOR_CYAN;
+    }
+    return COLOR_CYAN;
+}
+
+static void draw_server_state_overlay(uint8_t *pixels, mybot_lcd_indicator_t indicator)
+{
+    const int center_x = DISPLAY_BADGE_LEFT_X;
+    const int center_y = DISPLAY_BADGE_Y;
+
+    if (indicator == MYBOT_LCD_INDICATOR_NONE ||
+        indicator == MYBOT_LCD_INDICATOR_VP_REGISTERED) {
+        return;
+    }
+
+    draw_circle(pixels, center_x, center_y, DISPLAY_BADGE_RADIUS,
+                server_indicator_color(indicator));
+    switch (indicator) {
+    case MYBOT_LCD_INDICATOR_LISTENING:
+        draw_line(pixels, center_x, center_y - 6, center_x, center_y + 1, 6, COLOR_BLACK);
+        draw_line(pixels, center_x - 7, center_y - 1, center_x - 7, center_y + 3, 2,
+                  COLOR_BLACK);
+        draw_line(pixels, center_x - 7, center_y + 3, center_x, center_y + 7, 2, COLOR_BLACK);
+        draw_line(pixels, center_x, center_y + 7, center_x + 7, center_y + 3, 2, COLOR_BLACK);
+        draw_line(pixels, center_x + 7, center_y + 3, center_x + 7, center_y - 1, 2,
+                  COLOR_BLACK);
+        draw_line(pixels, center_x, center_y + 7, center_x, center_y + 11, 2, COLOR_BLACK);
+        break;
+    case MYBOT_LCD_INDICATOR_THINKING:
+        draw_circle(pixels, center_x - 8, center_y, 3, COLOR_BLACK);
+        draw_circle(pixels, center_x, center_y, 3, COLOR_BLACK);
+        draw_circle(pixels, center_x + 8, center_y, 3, COLOR_BLACK);
+        break;
+    case MYBOT_LCD_INDICATOR_SPEAKING:
+        draw_line(pixels, center_x - 8, center_y - 3, center_x - 8, center_y + 3, 5,
+                  COLOR_BLACK);
+        draw_line(pixels, center_x - 5, center_y - 4, center_x, center_y - 8, 3, COLOR_BLACK);
+        draw_line(pixels, center_x - 5, center_y + 4, center_x, center_y + 8, 3, COLOR_BLACK);
+        draw_line(pixels, center_x, center_y - 8, center_x, center_y + 8, 3, COLOR_BLACK);
+        draw_line(pixels, center_x + 5, center_y - 5, center_x + 9, center_y - 9, 2,
+                  COLOR_BLACK);
+        draw_line(pixels, center_x + 5, center_y + 5, center_x + 9, center_y + 9, 2,
+                  COLOR_BLACK);
+        break;
+    case MYBOT_LCD_INDICATOR_NONE:
+    case MYBOT_LCD_INDICATOR_VP_REGISTERED:
+        break;
+    }
 }
 
 static uint16_t screen_color(mybot_display_screen_t screen) {
@@ -258,9 +441,9 @@ static void draw_state_icon(uint8_t *pixels, mybot_display_screen_t screen, uint
         draw_line(pixels, 104, 56, 56, 104, 8, color);
         break;
     case MYBOT_DISPLAY_SCREEN_IN_CONVERSATION:
-        fill_rect(pixels, 55, 65, 9, 30, color);
-        fill_rect(pixels, 75, 53, 10, 54, color);
-        fill_rect(pixels, 96, 65, 9, 30, color);
+        draw_line(pixels, 59, 69, 59, 90, 9, color);
+        draw_line(pixels, 80, 58, 80, 101, 10, color);
+        draw_line(pixels, 100, 69, 100, 90, 9, color);
         break;
     case MYBOT_DISPLAY_SCREEN_WIFI_PROVISIONING:
     case MYBOT_DISPLAY_SCREEN_PAIRING:
@@ -333,6 +516,11 @@ static void render_command(unsigned int slot, const display_command_t *command) 
 
     draw_state_panel(panel_pixels(slot, 0), command->screen);
     draw_state_panel(panel_pixels(slot, 1), command->screen);
+    if (command->screen == MYBOT_DISPLAY_SCREEN_IN_CONVERSATION) {
+        mybot_lcd_indicator_t indicator = server_indicator(command->indicators);
+        draw_server_state_overlay(panel_pixels(slot, 0), indicator);
+        draw_server_state_overlay(panel_pixels(slot, 1), indicator);
+    }
     if (command->screen == MYBOT_DISPLAY_SCREEN_IN_CONVERSATION &&
         (command->indicators & MYBOT_LCD_INDICATOR_VP_REGISTERED)) {
         draw_vp_indicator(panel_pixels(slot, 0));
