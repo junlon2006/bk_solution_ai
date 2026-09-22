@@ -1,57 +1,48 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "bk7259_ops.h"
+#include "bk7259_platform_log.h"
+#include "display/lvgl_view.h"
 
-#include <mybot/platform/mybot_lcd.h>
-
+#include <api/aosl_atomic.h>
 #include <common/avdk_pixel_types.h>
 #include <common/bk_err.h>
 #include <components/bk_display.h>
 #include <components/bk_frame_buffer.h>
-#include <api/aosl_atomic.h>
-#include "bk7259_platform_log.h"
 #include <driver/gpio.h>
 #include <gpio_driver.h>
 #include <lcd/lcd_mipi_jd9855_320x385.h>
 #include <modules/pm.h>
+#include <os/mem.h>
 #include <os/os.h>
-
+/* Pinned LVGL 9.5 exposes handler setters publicly but defines their fields
+ * here. Preserve its copy/stride/alignment callbacks and replace allocation
+ * only, instead of duplicating the vendor's pixel-format copy routines. */
+#include <src/draw/lv_draw_buf_private.h>
 #include <stdbool.h>
-#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
 #define TAG "mybot_lcd"
-
 #define LCD_NATIVE_WIDTH 320
 #define LCD_NATIVE_HEIGHT 385
 #define LCD_LOGICAL_WIDTH LCD_NATIVE_HEIGHT
 #define LCD_LOGICAL_HEIGHT LCD_NATIVE_WIDTH
-#define LCD_BYTES_PER_PIXEL 2
-#define LCD_FRAME_BYTES (LCD_NATIVE_WIDTH * LCD_NATIVE_HEIGHT * LCD_BYTES_PER_PIXEL)
+#define LCD_FRAME_BYTES (LCD_NATIVE_WIDTH * LCD_NATIVE_HEIGHT * 2U)
 #define LCD_FRAME_COUNT 2
-#define LCD_RENDER_TIMEOUT_MS 250
-#define LCD_LABEL_BASELINE_Y 261
-#define LCD_PAIR_LABEL_BASELINE_Y 82
-#define LCD_PAIR_CODE_BASELINE_Y 208
-
+#define LCD_DRAW_ROWS 16
+#define LCD_DRAW_BYTES (LCD_LOGICAL_WIDTH * LCD_DRAW_ROWS * 2U)
+#define LCD_RENDER_TIMEOUT_MS 250U
+#define LCD_STOP_TIMEOUT_MS 3000U
+#define LCD_UI_STACK_BYTES (8U * 1024U)
+/* Beken priorities run in reverse order: keep UI below the audio workers. */
+#define LCD_UI_PRIORITY BEKEN_APPLICATION_PRIORITY
+#define LCD_SSID_CAPACITY 33
 #define LCD_POWER_GPIO GPIO_53
 #define LCD_RESET_GPIO GPIO_5
 #define LCD_BACKLIGHT_GPIO GPIO_7
 
-#define COLOR_BLACK 0x0000
-#define COLOR_NEAR_BLACK 0x0841
-#define COLOR_WHITE 0xffff
-#define COLOR_CYAN 0x3fff
-#define COLOR_BLUE 0x4a7f
-#define COLOR_GREEN 0x47e8
-#define COLOR_YELLOW 0xffe0
-#define COLOR_AMBER 0xfd20
-#define COLOR_RED 0xf986
-#define COLOR_GRAY 0x8410
-/* Voiceprint indicator: the MyBot ESP32 boards' saved green, RGB565(114, 255, 156).
- * The not-yet-registered state borrows the shared red instead of the ESP32 amber,
- * which did not stand out against the conversation screen. */
-#define COLOR_VP_SAVED 0x77f3
+/* lcd_flush consumes tightly packed RGB565 rows from the partial draw buffer. */
+_Static_assert(LV_DRAW_BUF_STRIDE_ALIGN == 1, "LCD partial flush requires packed rows");
 
 typedef struct {
     bk_display_bus_handle_t bus;
@@ -59,641 +50,252 @@ typedef struct {
     bk_display_ctlr_handle_t controller;
     uint16_t *frames[LCD_FRAME_COUNT];
     aosl_atomic_t frame_busy[LCD_FRAME_COUNT];
+    aosl_atomic_t callbacks_active;
+    aosl_atomic_t stopping;
     beken_semaphore_t frame_done;
-    unsigned int next_frame;
+    beken_semaphore_t wake;
+    beken_semaphore_t worker_done;
+    beken_thread_t worker;
+    lv_display_t *display;
+    uint8_t *draw_buffer;
+    bool view_created;
+    int composing;
+    int previous;
+    bool discard_refresh;
+    bool redraw_needed;
+    bool flush_fault;
     bool vddio_owned;
     bool power_gpio_owned;
     bool backlight_gpio_owned;
+    bool cpu_vote_owned;
     bool controller_inited;
     bool controller_open;
+    /* Snapshot lock protects these fields; only the UI owner touches LVGL. */
     bool prepared;
     bool accepting;
     bool sdk_attached;
+    bool pending;
+    mybot_lcd_content_t latest;
+    char provisioning_ssid[LCD_SSID_CAPACITY];
 } lcd_context_t;
 
 static lcd_context_t s_lcd;
-static beken_mutex_t s_lcd_lock;
+/* Created by the product owner before SDK start; kept for the process lifetime.
+ * Lifecycle waits never hold the snapshot lock. */
+static beken_mutex_t s_lifecycle_lock;
+static beken_mutex_t s_snapshot_lock;
 static bool s_frame_buffer_initialized;
+static bool s_lvgl_initialized;
 static const bk_display_dpu_config_t s_controller_config = {
-    .video = {
-        .enable = true,
-        .decompress = false,
-        .format = BK_PIXEL_FORMAT_RGB565,
-    },
+    .video = {.enable = true, .decompress = false, .format = BK_PIXEL_FORMAT_RGB565},
 };
 
-typedef struct {
-    uint16_t data_offset;
-    uint8_t character;
-    uint8_t width;
-    uint8_t height;
-    uint8_t advance;
-    int8_t x_offset;
-    int8_t y_offset;
-} lcd_font_glyph_t;
-
-typedef struct {
-    const uint8_t *bitmap;
-    const lcd_font_glyph_t *glyphs;
-    size_t glyph_count;
-    uint8_t tracking;
-} lcd_font_t;
-
-#include "bk7259_lcd_font.inc"
-
-static bool ensure_lcd_lock(void)
+static void unlock(beken_mutex_t *lock)
 {
-    if (s_lcd_lock) {
-        return true;
-    }
-    return rtos_init_mutex(&s_lcd_lock) == BK_OK;
-}
-
-static uint16_t *pixel_address(uint16_t *frame, int x, int y)
-{
-    if (!frame || x < 0 || x >= LCD_LOGICAL_WIDTH || y < 0 || y >= LCD_LOGICAL_HEIGHT) {
-        return NULL;
-    }
-
-    /* AVDK ROTATE_90 is a 270-degree buffer rotation into the native panel. */
-    int native_x = y;
-    int native_y = LCD_LOGICAL_WIDTH - x - 1;
-    return &frame[(size_t)native_y * LCD_NATIVE_WIDTH + (size_t)native_x];
-}
-
-static void blend_pixel(uint16_t *frame, int x, int y, uint16_t color, uint8_t alpha)
-{
-    if (alpha == 0) {
-        return;
-    }
-
-    uint16_t *pixel = pixel_address(frame, x, y);
-    if (!pixel) {
-        return;
-    }
-    if (alpha == 255) {
-        *pixel = color;
-        return;
-    }
-
-    uint32_t inverse = 255U - alpha;
-    uint32_t red = ((((color >> 11) & 0x1fU) * alpha + ((*pixel >> 11) & 0x1fU) * inverse +
-                     127U) /
-                    255U)
-                   << 11;
-    uint32_t green = ((((color >> 5) & 0x3fU) * alpha + ((*pixel >> 5) & 0x3fU) * inverse +
-                       127U) /
-                      255U)
-                     << 5;
-    uint32_t blue = ((color & 0x1fU) * alpha + (*pixel & 0x1fU) * inverse + 127U) / 255U;
-    *pixel = (uint16_t)(red | green | blue);
-}
-
-static void fill_screen(uint16_t *frame, uint16_t color)
-{
-    for (size_t i = 0; i < (size_t)LCD_NATIVE_WIDTH * LCD_NATIVE_HEIGHT; ++i) {
-        frame[i] = color;
+    if (rtos_unlock_mutex(lock) != BK_OK) {
+        MYBOT_LOGE(TAG, "mutex unlock failed");
     }
 }
 
-static bool point_in_capsule(int point_x8, int point_y8, int start_x8, int start_y8,
-                             int end_x8, int end_y8, int radius_squared)
+/* Both notifications are coalescing: with a valid semaphore, BK's only give
+ * failure means its counter is already full. State/ownership lives elsewhere. */
+static void notify(beken_semaphore_t *event)
 {
-    int vector_x = end_x8 - start_x8;
-    int vector_y = end_y8 - start_y8;
-    int point_vector_x = point_x8 - start_x8;
-    int point_vector_y = point_y8 - start_y8;
-    int length_squared = vector_x * vector_x + vector_y * vector_y;
-    int projection = point_vector_x * vector_x + point_vector_y * vector_y;
-
-    if (projection <= 0 || length_squared == 0) {
-        return point_vector_x * point_vector_x + point_vector_y * point_vector_y <=
-               radius_squared;
-    }
-    if (projection >= length_squared) {
-        int end_dx = point_x8 - end_x8;
-        int end_dy = point_y8 - end_y8;
-        return end_dx * end_dx + end_dy * end_dy <= radius_squared;
-    }
-
-    int64_t cross = (int64_t)point_vector_x * vector_y -
-                    (int64_t)point_vector_y * vector_x;
-    return cross * cross <= (int64_t)radius_squared * length_squared;
-}
-
-static void draw_line(uint16_t *frame, int x0, int y0, int x1, int y1, int thickness,
-                      uint16_t color)
-{
-    static const int sample_offsets[4] = {-3, -1, 1, 3};
-    if (!frame || thickness <= 0) {
-        return;
-    }
-
-    int padding = (thickness + 1) / 2 + 1;
-    int min_x = (x0 < x1 ? x0 : x1) - padding;
-    int max_x = (x0 > x1 ? x0 : x1) + padding;
-    int min_y = (y0 < y1 ? y0 : y1) - padding;
-    int max_y = (y0 > y1 ? y0 : y1) + padding;
-    if (min_x < 0) {
-        min_x = 0;
-    }
-    if (max_x >= LCD_LOGICAL_WIDTH) {
-        max_x = LCD_LOGICAL_WIDTH - 1;
-    }
-    if (min_y < 0) {
-        min_y = 0;
-    }
-    if (max_y >= LCD_LOGICAL_HEIGHT) {
-        max_y = LCD_LOGICAL_HEIGHT - 1;
-    }
-
-    int start_x8 = x0 * 8;
-    int start_y8 = y0 * 8;
-    int end_x8 = x1 * 8;
-    int end_y8 = y1 * 8;
-    int radius8 = thickness * 4;
-    int radius_squared = radius8 * radius8;
-
-    for (int y = min_y; y <= max_y; ++y) {
-        for (int x = min_x; x <= max_x; ++x) {
-            unsigned int covered = 0;
-            for (size_t sample_y = 0; sample_y < 4; ++sample_y) {
-                int point_y8 = y * 8 + sample_offsets[sample_y];
-                for (size_t sample_x = 0; sample_x < 4; ++sample_x) {
-                    int point_x8 = x * 8 + sample_offsets[sample_x];
-                    if (point_in_capsule(point_x8, point_y8, start_x8, start_y8, end_x8,
-                                         end_y8, radius_squared)) {
-                        ++covered;
-                    }
-                }
-            }
-            blend_pixel(frame, x, y, color, (uint8_t)((covered * 255U + 8U) >> 4));
-        }
-    }
-}
-
-static void draw_radial(uint16_t *frame, int center_x, int center_y, int inner_radius,
-                        int outer_radius, uint16_t color)
-{
-    static const int sample_offsets[4] = {-3, -1, 1, 3};
-    if (!frame || outer_radius <= 0) {
-        return;
-    }
-
-    int min_x = center_x - outer_radius;
-    int max_x = center_x + outer_radius;
-    int min_y = center_y - outer_radius;
-    int max_y = center_y + outer_radius;
-    if (min_x < 0) {
-        min_x = 0;
-    }
-    if (max_x >= LCD_LOGICAL_WIDTH) {
-        max_x = LCD_LOGICAL_WIDTH - 1;
-    }
-    if (min_y < 0) {
-        min_y = 0;
-    }
-    if (max_y >= LCD_LOGICAL_HEIGHT) {
-        max_y = LCD_LOGICAL_HEIGHT - 1;
-    }
-
-    int outer8 = outer_radius * 8;
-    int outer_squared = outer8 * outer8;
-    int inner8 = inner_radius > 0 ? inner_radius * 8 : 0;
-    int inner_squared = inner8 * inner8;
-
-    for (int y = min_y; y <= max_y; ++y) {
-        for (int x = min_x; x <= max_x; ++x) {
-            unsigned int covered = 0;
-            for (size_t sample_y = 0; sample_y < 4; ++sample_y) {
-                int dy8 = (y - center_y) * 8 + sample_offsets[sample_y];
-                for (size_t sample_x = 0; sample_x < 4; ++sample_x) {
-                    int dx8 = (x - center_x) * 8 + sample_offsets[sample_x];
-                    int distance_squared = dx8 * dx8 + dy8 * dy8;
-                    if (distance_squared <= outer_squared &&
-                        (inner_radius <= 0 || distance_squared >= inner_squared)) {
-                        ++covered;
-                    }
-                }
-            }
-            blend_pixel(frame, x, y, color, (uint8_t)((covered * 255U + 8U) >> 4));
-        }
-    }
-}
-
-static void draw_ring(uint16_t *frame, int center_x, int center_y, int radius, int thickness,
-                      uint16_t color)
-{
-    int inner_radius = radius - thickness;
-    draw_radial(frame, center_x, center_y, inner_radius > 0 ? inner_radius : 0, radius, color);
-}
-
-static void draw_disc(uint16_t *frame, int center_x, int center_y, int radius, uint16_t color)
-{
-    draw_radial(frame, center_x, center_y, 0, radius, color);
-}
-
-static const lcd_font_glyph_t *font_glyph(const lcd_font_t *font, char character)
-{
-    if (!font) {
-        return NULL;
-    }
-
-    const lcd_font_glyph_t *fallback = NULL;
-    for (size_t index = 0; index < font->glyph_count; ++index) {
-        if (font->glyphs[index].character == (uint8_t)character) {
-            return &font->glyphs[index];
-        }
-        if (font->glyphs[index].character == '?') {
-            fallback = &font->glyphs[index];
-        }
-    }
-    return fallback;
-}
-
-static int text_width(const lcd_font_t *font, const char *text, size_t length)
-{
-    int width = 0;
-    size_t glyphs = 0;
-
-    for (size_t index = 0; index < length; ++index) {
-        const lcd_font_glyph_t *glyph = font_glyph(font, text[index]);
-        if (!glyph) {
-            continue;
-        }
-        if (glyphs != 0) {
-            width += font->tracking;
-        }
-        width += glyph->advance;
-        ++glyphs;
-    }
-    return width;
-}
-
-static void draw_character(uint16_t *frame, int x, int baseline_y,
-                           const lcd_font_t *font, const lcd_font_glyph_t *glyph,
-                           uint16_t color)
-{
-    if (!frame || !font || !glyph) {
-        return;
-    }
-
-    size_t stride = ((size_t)glyph->width + 1U) / 2U;
-    const uint8_t *bitmap = font->bitmap + glyph->data_offset;
-    for (uint8_t row = 0; row < glyph->height; ++row) {
-        const uint8_t *bitmap_row = bitmap + (size_t)row * stride;
-        for (uint8_t column = 0; column < glyph->width; ++column) {
-            uint8_t packed = bitmap_row[column / 2U];
-            uint8_t coverage = (column & 1U) == 0 ? packed >> 4 : packed & 0x0fU;
-            blend_pixel(frame, x + glyph->x_offset + column,
-                        baseline_y + glyph->y_offset + row, color,
-                        (uint8_t)(coverage * 17U));
-        }
-    }
-}
-
-static void draw_text_centered(uint16_t *frame, int baseline_y, const char *text, size_t length,
-                               const lcd_font_t *font, uint16_t color)
-{
-    int pen_x = (LCD_LOGICAL_WIDTH - text_width(font, text, length)) / 2;
-    size_t glyphs = 0;
-
-    for (size_t index = 0; index < length; ++index) {
-        const lcd_font_glyph_t *glyph = font_glyph(font, text[index]);
-        if (!glyph) {
-            continue;
-        }
-        if (glyphs != 0) {
-            pen_x += font->tracking;
-        }
-        draw_character(frame, pen_x, baseline_y, font, glyph, color);
-        pen_x += glyph->advance;
-        ++glyphs;
-    }
-}
-
-static uint16_t screen_color(mybot_lcd_screen_t screen)
-{
-    switch (screen) {
-    case MYBOT_LCD_SCREEN_STARTING:
-        return COLOR_CYAN;
-    case MYBOT_LCD_SCREEN_WIFI_PROVISIONING:
-        return COLOR_AMBER;
-    case MYBOT_LCD_SCREEN_WIFI_DISCONNECTED:
-    case MYBOT_LCD_SCREEN_FAILED:
-        return COLOR_RED;
-    case MYBOT_LCD_SCREEN_STARTING_SERVICES:
-        return COLOR_BLUE;
-    case MYBOT_LCD_SCREEN_PAIRING:
-        return COLOR_YELLOW;
-    case MYBOT_LCD_SCREEN_READY:
-        return COLOR_GREEN;
-    case MYBOT_LCD_SCREEN_IN_CONVERSATION:
-        return COLOR_CYAN;
-    case MYBOT_LCD_SCREEN_STOPPING:
-        return COLOR_GRAY;
-    case MYBOT_LCD_SCREEN_PAIR_CODE:
-    case MYBOT_LCD_SCREEN_COUNT:
-        return COLOR_CYAN;
-    }
-    return COLOR_GRAY;
-}
-
-static const char *screen_label(mybot_lcd_screen_t screen)
-{
-    switch (screen) {
-    case MYBOT_LCD_SCREEN_STARTING:
-        return "STARTING";
-    case MYBOT_LCD_SCREEN_WIFI_PROVISIONING:
-        return "WIFI SETUP";
-    case MYBOT_LCD_SCREEN_WIFI_DISCONNECTED:
-        return "WIFI LOST";
-    case MYBOT_LCD_SCREEN_STARTING_SERVICES:
-        return "SERVICES";
-    case MYBOT_LCD_SCREEN_PAIRING:
-        return "PAIRING";
-    case MYBOT_LCD_SCREEN_PAIR_CODE:
-        return "PAIR CODE";
-    case MYBOT_LCD_SCREEN_READY:
-        return "READY";
-    case MYBOT_LCD_SCREEN_IN_CONVERSATION:
-        return "CONVERSATION";
-    case MYBOT_LCD_SCREEN_FAILED:
-        return "FAILED";
-    case MYBOT_LCD_SCREEN_STOPPING:
-        return "STOPPING";
-    case MYBOT_LCD_SCREEN_COUNT:
-        return NULL;
-    }
-    return NULL;
-}
-
-static mybot_lcd_indicator_t server_indicator(uint32_t indicators)
-{
-    /* The SDK guarantees mutual exclusion. Keep a stable precedence for a
-     * malformed bitmask received from an older/custom caller. */
-    if (indicators & MYBOT_LCD_INDICATOR_LISTENING) {
-        return MYBOT_LCD_INDICATOR_LISTENING;
-    }
-    if (indicators & MYBOT_LCD_INDICATOR_THINKING) {
-        return MYBOT_LCD_INDICATOR_THINKING;
-    }
-    if (indicators & MYBOT_LCD_INDICATOR_SPEAKING) {
-        return MYBOT_LCD_INDICATOR_SPEAKING;
-    }
-    return MYBOT_LCD_INDICATOR_NONE;
-}
-
-static uint16_t server_indicator_color(mybot_lcd_indicator_t indicator)
-{
-    switch (indicator) {
-    case MYBOT_LCD_INDICATOR_LISTENING:
-        return COLOR_CYAN;
-    case MYBOT_LCD_INDICATOR_THINKING:
-        return COLOR_AMBER;
-    case MYBOT_LCD_INDICATOR_SPEAKING:
-        return COLOR_GREEN;
-    case MYBOT_LCD_INDICATOR_NONE:
-    case MYBOT_LCD_INDICATOR_VP_REGISTERED:
-        return COLOR_CYAN;
-    }
-    return COLOR_CYAN;
-}
-
-static void draw_server_state_overlay(uint16_t *frame, mybot_lcd_indicator_t indicator)
-{
-    const int center_x = LCD_LOGICAL_WIDTH / 2 - 53;
-    const int center_y = 66;
-
-    if (indicator == MYBOT_LCD_INDICATOR_NONE ||
-        indicator == MYBOT_LCD_INDICATOR_VP_REGISTERED) {
-        return;
-    }
-
-    draw_disc(frame, center_x, center_y, 17, server_indicator_color(indicator));
-    switch (indicator) {
-    case MYBOT_LCD_INDICATOR_LISTENING:
-        draw_line(frame, center_x, center_y - 6, center_x, center_y + 1, 6, COLOR_BLACK);
-        draw_line(frame, center_x - 7, center_y - 1, center_x - 7, center_y + 3, 2,
-                  COLOR_BLACK);
-        draw_line(frame, center_x - 7, center_y + 3, center_x, center_y + 7, 2, COLOR_BLACK);
-        draw_line(frame, center_x, center_y + 7, center_x + 7, center_y + 3, 2, COLOR_BLACK);
-        draw_line(frame, center_x + 7, center_y + 3, center_x + 7, center_y - 1, 2,
-                  COLOR_BLACK);
-        draw_line(frame, center_x, center_y + 7, center_x, center_y + 11, 2, COLOR_BLACK);
-        break;
-    case MYBOT_LCD_INDICATOR_THINKING:
-        draw_disc(frame, center_x - 8, center_y, 3, COLOR_BLACK);
-        draw_disc(frame, center_x, center_y, 3, COLOR_BLACK);
-        draw_disc(frame, center_x + 8, center_y, 3, COLOR_BLACK);
-        break;
-    case MYBOT_LCD_INDICATOR_SPEAKING:
-        draw_line(frame, center_x - 8, center_y - 3, center_x - 8, center_y + 3, 5,
-                  COLOR_BLACK);
-        draw_line(frame, center_x - 5, center_y - 4, center_x, center_y - 8, 3, COLOR_BLACK);
-        draw_line(frame, center_x - 5, center_y + 4, center_x, center_y + 8, 3, COLOR_BLACK);
-        draw_line(frame, center_x, center_y - 8, center_x, center_y + 8, 3, COLOR_BLACK);
-        draw_line(frame, center_x + 5, center_y - 5, center_x + 9, center_y - 9, 2,
-                  COLOR_BLACK);
-        draw_line(frame, center_x + 5, center_y + 5, center_x + 9, center_y + 9, 2,
-                  COLOR_BLACK);
-        break;
-    case MYBOT_LCD_INDICATOR_NONE:
-    case MYBOT_LCD_INDICATOR_VP_REGISTERED:
-        break;
-    }
-}
-
-static void draw_state_icon(uint16_t *frame, mybot_lcd_screen_t screen, uint16_t color)
-{
-    const int center_x = LCD_LOGICAL_WIDTH / 2;
-    const int center_y = 118;
-
-    draw_ring(frame, center_x, center_y, 70, 5, color);
-    switch (screen) {
-    case MYBOT_LCD_SCREEN_STARTING:
-    case MYBOT_LCD_SCREEN_STARTING_SERVICES:
-        draw_line(frame, center_x, center_y - 37, center_x, center_y, 8, color);
-        draw_line(frame, center_x, center_y, center_x + 28, center_y + 20, 8, color);
-        break;
-    case MYBOT_LCD_SCREEN_WIFI_PROVISIONING:
-    case MYBOT_LCD_SCREEN_PAIRING:
-        draw_disc(frame, center_x - 32, center_y, 9, color);
-        draw_disc(frame, center_x, center_y, 9, color);
-        draw_disc(frame, center_x + 32, center_y, 9, color);
-        break;
-    case MYBOT_LCD_SCREEN_WIFI_DISCONNECTED:
-    case MYBOT_LCD_SCREEN_FAILED:
-        draw_line(frame, center_x - 28, center_y - 28, center_x + 28, center_y + 28, 9,
-                  color);
-        draw_line(frame, center_x + 28, center_y - 28, center_x - 28, center_y + 28, 9,
-                  color);
-        break;
-    case MYBOT_LCD_SCREEN_READY:
-        draw_line(frame, center_x - 36, center_y, center_x - 10, center_y + 27, 9, color);
-        draw_line(frame, center_x - 10, center_y + 27, center_x + 43, center_y - 31, 9,
-                  color);
-        break;
-    case MYBOT_LCD_SCREEN_IN_CONVERSATION:
-        draw_line(frame, center_x - 33, center_y - 17, center_x - 33, center_y + 17, 12,
-                  color);
-        draw_line(frame, center_x, center_y - 34, center_x, center_y + 34, 12, color);
-        draw_line(frame, center_x + 33, center_y - 17, center_x + 33, center_y + 17, 12,
-                  color);
-        break;
-    case MYBOT_LCD_SCREEN_STOPPING:
-        draw_line(frame, center_x - 30, center_y, center_x + 30, center_y, 10, color);
-        break;
-    case MYBOT_LCD_SCREEN_PAIR_CODE:
-    case MYBOT_LCD_SCREEN_COUNT:
-        break;
-    }
-}
-
-static void draw_voiceprint_glyph(uint16_t *frame, int center_x, int center_y, uint16_t color)
-{
-    /* A single waveform trace reads as a voiceprint; the badge's disc color,
-     * not the glyph, carries the registration state. */
-    draw_line(frame, center_x - 10, center_y, center_x - 7, center_y, 3, color);
-    draw_line(frame, center_x - 7, center_y, center_x - 4, center_y - 4, 3, color);
-    draw_line(frame, center_x - 4, center_y - 4, center_x - 1, center_y + 6, 3, color);
-    draw_line(frame, center_x - 1, center_y + 6, center_x + 2, center_y - 8, 3, color);
-    draw_line(frame, center_x + 2, center_y - 8, center_x + 5, center_y + 3, 3, color);
-    draw_line(frame, center_x + 5, center_y + 3, center_x + 8, center_y, 3, color);
-    draw_line(frame, center_x + 8, center_y, center_x + 10, center_y, 3, color);
-}
-
-static void draw_voiceprint_overlay(uint16_t *frame, bool registered)
-{
-    const int center_x = LCD_LOGICAL_WIDTH / 2 + 53;
-    const int center_y = 66;
-
-    draw_disc(frame, center_x, center_y, 17, registered ? COLOR_VP_SAVED : COLOR_RED);
-    draw_voiceprint_glyph(frame, center_x, center_y, COLOR_BLACK);
-}
-
-static int pair_code_length(const char *code, size_t *out_length)
-{
-    if (!code || !out_length) {
-        return -1;
-    }
-
-    size_t length = 0;
-    while (length < MYBOT_LCD_PAIR_CODE_CAPACITY && code[length] != '\0') {
-        ++length;
-    }
-    if (length != 6) {
-        return -1;
-    }
-    for (size_t index = 0; index < length; ++index) {
-        if (code[index] < '0' || code[index] > '9') {
-            return -1;
-        }
-    }
-    *out_length = length;
-    return 0;
-}
-
-static int render_content(uint16_t *frame, const mybot_lcd_content_t *content)
-{
-    if (!frame || !content || content->screen < MYBOT_LCD_SCREEN_STARTING ||
-        content->screen >= MYBOT_LCD_SCREEN_COUNT) {
-        return -1;
-    }
-
-    fill_screen(frame, content->screen == MYBOT_LCD_SCREEN_PAIR_CODE ? COLOR_BLACK
-                                                                     : COLOR_NEAR_BLACK);
-    const char *label = screen_label(content->screen);
-    if (!label) {
-        return -1;
-    }
-
-    if (content->screen == MYBOT_LCD_SCREEN_PAIR_CODE) {
-        size_t code_length;
-        if (pair_code_length(content->pair_code, &code_length) < 0) {
-            return -1;
-        }
-        draw_text_centered(frame, LCD_PAIR_LABEL_BASELINE_Y, label, strlen(label),
-                           &s_ui_label_font, COLOR_CYAN);
-        draw_text_centered(frame, LCD_PAIR_CODE_BASELINE_Y, content->pair_code, code_length,
-                           &s_ui_digit_font, COLOR_WHITE);
-        return 0;
-    }
-
-    uint16_t color = screen_color(content->screen);
-    draw_state_icon(frame, content->screen, color);
-    draw_text_centered(frame, LCD_LABEL_BASELINE_Y, label, strlen(label), &s_ui_label_font,
-                       color);
-    if (content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION) {
-        draw_server_state_overlay(frame, server_indicator(content->indicators));
-        draw_voiceprint_overlay(
-            frame, (content->indicators & MYBOT_LCD_INDICATOR_VP_REGISTERED) != 0);
-    }
-    return 0;
-}
-
-static void release_frame(unsigned int index)
-{
-    if (index >= LCD_FRAME_COUNT) {
-        return;
-    }
-    if (aosl_atomic_xchg(&s_lcd.frame_busy[index], 0) != 0 &&
-        s_lcd.frame_done) {
-        (void)rtos_set_semaphore(&s_lcd.frame_done);
+    if (rtos_set_semaphore(event) != BK_OK) {
+        /* An earlier notification is pending; the bounded wait also rechecks state. */
     }
 }
 
 static avdk_err_t frame_release_callback(void *frame)
 {
-    for (unsigned int index = 0; index < LCD_FRAME_COUNT; ++index) {
-        if (frame == s_lcd.frames[index]) {
-            release_frame(index);
+    aosl_atomic_inc(&s_lcd.callbacks_active);
+    for (unsigned int i = 0; i < LCD_FRAME_COUNT; ++i) {
+        if (frame == s_lcd.frames[i]) {
+            if (aosl_atomic_xchg(&s_lcd.frame_busy[i], 0)) {
+                notify(&s_lcd.frame_done);
+            }
+            aosl_atomic_dec(&s_lcd.callbacks_active);
             return AVDK_ERR_OK;
         }
     }
+    aosl_atomic_dec(&s_lcd.callbacks_active);
     return AVDK_ERR_INVAL;
 }
 
-static int wait_for_frame(unsigned int *out_index)
+static int free_frame(void)
 {
-    uint32_t started_at = rtos_get_time();
+    for (int i = 0; i < LCD_FRAME_COUNT; ++i) {
+        if (!aosl_atomic_read(&s_lcd.frame_busy[i])) {
+            return i;
+        }
+    }
+    return -1;
+}
 
-    for (;;) {
-        for (unsigned int offset = 0; offset < LCD_FRAME_COUNT; ++offset) {
-            unsigned int index = (s_lcd.next_frame + offset) % LCD_FRAME_COUNT;
-            if (aosl_atomic_read(&s_lcd.frame_busy[index]) == 0) {
-                *out_index = index;
-                return 0;
+static int acquire_frame(void)
+{
+    uint32_t start = rtos_get_time();
+    while (!aosl_atomic_read(&s_lcd.stopping)) {
+        int i = free_frame();
+        if (i >= 0) {
+            return i;
+        }
+        uint32_t elapsed = rtos_get_time() - start;
+        if (elapsed >= LCD_RENDER_TIMEOUT_MS) {
+            break;
+        }
+        uint32_t remaining = LCD_RENDER_TIMEOUT_MS - elapsed;
+        bk_err_t ret = rtos_get_semaphore(&s_lcd.frame_done, remaining < 50U ? remaining : 50U);
+        if (ret != BK_OK && ret != kTimeoutErr) {
+            break;
+        }
+    }
+    return -1;
+}
+
+static void flush_failed(const char *operation, int result)
+{
+    if (!s_lcd.flush_fault) {
+        MYBOT_LOGE(TAG, "LVGL %s failed: %d; retaining scanout buffers", operation, result);
+    }
+    s_lcd.flush_fault = true;
+    s_lcd.redraw_needed = true;
+}
+
+/* LVGL owns only the stripe. DPU owns submitted full frames until its callback
+ * releases them. Never call LVGL from that IRQ callback. */
+static void lcd_flush(lv_display_t *display, const lv_area_t *area, uint8_t *pixels)
+{
+    bool last = lv_display_flush_is_last(display);
+    if (aosl_atomic_read(&s_lcd.stopping)) {
+        s_lcd.discard_refresh = true;
+    }
+    if (!s_lcd.discard_refresh && s_lcd.composing < 0) {
+        s_lcd.composing = acquire_frame();
+        if (s_lcd.composing < 0) {
+            s_lcd.discard_refresh = true;
+            flush_failed("frame acquire", -1);
+        } else if (s_lcd.previous >= 0 && s_lcd.previous != s_lcd.composing) {
+            /* The old scanout is immutable and may be read while DPU scans it.
+             * Seed unchanged pixels once per refresh, not once per stripe. */
+            memcpy(s_lcd.frames[s_lcd.composing], s_lcd.frames[s_lcd.previous], LCD_FRAME_BYTES);
+        }
+    }
+
+    if (!s_lcd.discard_refresh) {
+        uint16_t *dst = s_lcd.frames[s_lcd.composing];
+        const uint16_t *src = (const uint16_t *)pixels;
+        int width = lv_area_get_width(area);
+        if (area->x1 < 0 || area->y1 < 0 || area->x2 >= LCD_LOGICAL_WIDTH ||
+            area->y2 >= LCD_LOGICAL_HEIGHT || width <= 0 || lv_area_get_height(area) <= 0) {
+            s_lcd.discard_refresh = true;
+            flush_failed("invalid area", -1);
+        } else {
+            for (int y = area->y1; y <= area->y2; ++y) {
+                for (int x = area->x1; x <= area->x2; ++x) {
+                    /* Same 270-degree transform as the existing Robot V2 UI.
+                     * RGB565 is native byte order; SPI byte swapping is incorrect here. */
+                    dst[(LCD_LOGICAL_WIDTH - x - 1) * LCD_NATIVE_WIDTH + y] = *src++;
+                }
             }
         }
+    }
 
-        uint32_t elapsed = rtos_get_time() - started_at;
-        if (elapsed >= LCD_RENDER_TIMEOUT_MS ||
-            rtos_get_semaphore(&s_lcd.frame_done, LCD_RENDER_TIMEOUT_MS - elapsed) != BK_OK) {
-            MYBOT_LOGE(TAG, "timed out waiting for a display frame");
-            return -1;
+    if (last) {
+        if (!s_lcd.discard_refresh) {
+            int index = s_lcd.composing;
+            /* Exactly two scanout buffers and one producer: acquiring a free
+             * frame proves that no third/pending frame can block the vendor
+             * flush routine's wait-for-slot path. */
+            aosl_atomic_set(&s_lcd.frame_busy[index], 1);
+            avdk_err_t ret = bk_display_flush(s_lcd.controller, s_lcd.frames[index],
+                                              frame_release_callback);
+            s_lcd.previous = index;
+            if (ret != AVDK_ERR_OK) {
+                /* Even an error may have promoted the new scanout. Only its
+                 * release callback (or completed display deinit) proves it free. */
+                flush_failed("submission", ret);
+            } else if (s_lcd.flush_fault) {
+                MYBOT_LOGI(TAG, "LVGL display submission recovered");
+                s_lcd.flush_fault = false;
+            }
         }
+        s_lcd.composing = -1;
+        s_lcd.discard_refresh = false;
+    }
+    /* All stripe bytes have been copied, so LVGL may reuse its stripe even
+     * though the independently owned full frame remains in DPU use. */
+    lv_display_flush_ready(display);
+}
+
+static uint32_t lcd_tick(void)
+{
+    return rtos_get_time();
+}
+
+static void *draw_buffer_malloc(size_t bytes, lv_color_format_t format)
+{
+    (void)format;
+    if (bytes > SIZE_MAX - (LV_DRAW_BUF_ALIGN - 1U)) {
+        return NULL;
+    }
+    /* Vendor buf_malloc falls back to PSRAM, but its paired lv_free uses
+     * HSRAM. Keep glyph, image and layer allocations in the same heap even
+     * on OOM; LVGL retains its normal allocation-failure handling. */
+    return lv_malloc(bytes + LV_DRAW_BUF_ALIGN - 1U);
+}
+
+static void configure_draw_allocators(void)
+{
+    lv_draw_buf_get_handlers()->buf_malloc_cb = draw_buffer_malloc;
+    lv_draw_buf_get_font_handlers()->buf_malloc_cb = draw_buffer_malloc;
+    lv_draw_buf_get_image_handlers()->buf_malloc_cb = draw_buffer_malloc;
+}
+
+static void lvgl_log(lv_log_level_t level, const char *text)
+{
+    if (level >= LV_LOG_LEVEL_ERROR) {
+        MYBOT_LOGE(TAG, "LVGL: %s", text);
+    } else {
+        MYBOT_LOGW(TAG, "LVGL: %s", text);
     }
 }
 
-static int submit_content_locked(const mybot_lcd_content_t *content)
+static void ui_worker(void *arg)
 {
-    unsigned int index;
-    if (!s_lcd.controller || wait_for_frame(&index) < 0 ||
-        render_content(s_lcd.frames[index], content) < 0) {
-        return -1;
+    (void)arg;
+    while (!aosl_atomic_read(&s_lcd.stopping)) {
+        /* Serialize the brief content application with SDK detach and portal
+         * updates. The snapshot lock is never held during rendering/flush. */
+        if (rtos_lock_mutex(&s_snapshot_lock) == BK_OK) {
+            if (s_lcd.pending && s_lcd.accepting) {
+                mybot_lvgl_view_update(&s_lcd.latest, s_lcd.provisioning_ssid);
+                s_lcd.pending = false;
+            }
+            unlock(&s_snapshot_lock);
+        }
+        if (s_lcd.redraw_needed && free_frame() >= 0) {
+            s_lcd.redraw_needed = false;
+            lv_obj_invalidate(lv_display_get_screen_active(s_lcd.display));
+        }
+        uint32_t wait_ms = lv_timer_handler();
+        if (wait_ms > 50U) {
+            wait_ms = 50U;
+        } else if (wait_ms < 5U) {
+            wait_ms = 5U;
+        }
+        bk_err_t ret = rtos_get_semaphore(&s_lcd.wake, wait_ms);
+        if (ret != BK_OK && ret != kTimeoutErr) {
+            MYBOT_LOGE(TAG, "UI wake wait failed: %d", ret);
+            break;
+        }
     }
-
-    aosl_atomic_set(&s_lcd.frame_busy[index], 1);
-    avdk_err_t result =
-        bk_display_flush(s_lcd.controller, s_lcd.frames[index], frame_release_callback);
-    if (result != AVDK_ERR_OK) {
-        /* A failed update may already have become the active scanout frame. */
-        MYBOT_LOGE(TAG, "frame submission failed: %d", result);
-        return -1;
-    }
-    s_lcd.next_frame = (index + 1) % LCD_FRAME_COUNT;
-    return 0;
+    aosl_atomic_set(&s_lcd.stopping, 1);
+    /* Last display-resource access. Notification semaphores live for the
+     * process lifetime, so a waking owner cannot delete this semaphore while
+     * the kernel's give operation is still returning on the other core. */
+    notify(&s_lcd.worker_done);
+    rtos_delete_thread(NULL);
 }
 
 static int set_backlight(bool enabled)
@@ -789,117 +391,179 @@ static int panel_power_off(void)
 
 static bool resources_owned(void)
 {
-    return s_lcd.controller || s_lcd.panel || s_lcd.bus || s_lcd.frames[0] ||
-           s_lcd.frames[1] || s_lcd.frame_done || s_lcd.vddio_owned ||
-           s_lcd.power_gpio_owned || s_lcd.backlight_gpio_owned;
+    return s_lcd.worker || s_lcd.display || s_lcd.draw_buffer ||
+           s_lcd.controller || s_lcd.panel || s_lcd.bus || s_lcd.frames[0] ||
+           s_lcd.frames[1] ||
+           s_lcd.vddio_owned || s_lcd.power_gpio_owned || s_lcd.backlight_gpio_owned ||
+           s_lcd.cpu_vote_owned;
 }
 
+static int stop_worker(void)
+{
+    aosl_atomic_set(&s_lcd.stopping, 1);
+    if (!s_lcd.worker) {
+        return 0;
+    }
+    notify(&s_lcd.wake);
+    if (rtos_get_semaphore(&s_lcd.worker_done, LCD_STOP_TIMEOUT_MS) != BK_OK) {
+        MYBOT_LOGE(TAG, "UI stop timed out; retaining display and worker resources");
+        return -1;
+    }
+    /* The worker now only self-deletes. Do not use BK's polling join here:
+     * it dereferences a TCB which an idle core may already have reclaimed. */
+    s_lcd.worker = NULL;
+    return 0;
+}
+
+/* Called under lifecycle lock with accepting=false; callbacks remain valid
+ * until display deinit completes, including after a failed earlier teardown. */
 static int teardown_locked(void)
 {
-    if (s_lcd.backlight_gpio_owned) {
-        if (set_backlight(false) == 0) {
-            s_lcd.backlight_gpio_owned = false;
+    if (stop_worker() < 0) {
+        return -1;
+    }
+    if (s_lcd.backlight_gpio_owned && set_backlight(false) < 0) {
+        MYBOT_LOGW(TAG, "failed to disable display backlight");
+    }
+    if (s_lcd.controller_open) {
+        if (bk_display_close(s_lcd.controller) != AVDK_ERR_OK) {
+            MYBOT_LOGE(TAG, "display close failed; retaining resources");
+            return -1;
         }
+        s_lcd.controller_open = false;
+    }
+    if (s_lcd.controller_inited) {
+        if (bk_display_deinit(s_lcd.controller) != AVDK_ERR_OK) {
+            MYBOT_LOGE(TAG, "display deinit failed; retaining scanout buffers");
+            return -1;
+        }
+        s_lcd.controller_inited = false;
+    }
+    uint32_t callback_wait = rtos_get_time();
+    while (aosl_atomic_read(&s_lcd.frame_busy[0]) ||
+           aosl_atomic_read(&s_lcd.frame_busy[1]) ||
+           aosl_atomic_read(&s_lcd.callbacks_active)) {
+        if ((uint32_t)(rtos_get_time() - callback_wait) >= LCD_RENDER_TIMEOUT_MS) {
+            MYBOT_LOGE(TAG, "display frame release unconfirmed; retaining resources");
+            return -1;
+        }
+        rtos_delay_milliseconds(1);
     }
     if (s_lcd.controller) {
-        if (s_lcd.controller_open) {
-            if (bk_display_close(s_lcd.controller) != AVDK_ERR_OK) {
-                MYBOT_LOGW(TAG, "failed to close display controller");
-            } else {
-                s_lcd.controller_open = false;
-            }
-        }
-        if (s_lcd.controller_inited) {
-            if (bk_display_deinit(s_lcd.controller) != AVDK_ERR_OK) {
-                MYBOT_LOGE(TAG, "display deinit failed; retaining owned framebuffers");
-                return -1;
-            }
-            s_lcd.controller_inited = false;
-        }
         if (bk_display_delete(s_lcd.controller) != AVDK_ERR_OK) {
-            MYBOT_LOGE(TAG, "display delete failed; retaining owned framebuffers");
+            MYBOT_LOGE(TAG, "display delete failed; retaining resources");
             return -1;
         }
         s_lcd.controller = NULL;
-        s_lcd.controller_inited = false;
-        s_lcd.controller_open = false;
     }
     if (s_lcd.panel) {
         if (bk_lcd_panel_delete(s_lcd.panel) != BK_OK) {
-            MYBOT_LOGE(TAG, "panel delete failed; retaining display resources");
+            MYBOT_LOGE(TAG, "panel delete failed; retaining resources");
             return -1;
         }
         s_lcd.panel = NULL;
     }
     if (s_lcd.bus) {
         if (bk_display_bus_delete(s_lcd.bus) != AVDK_ERR_OK) {
-            MYBOT_LOGE(TAG, "DSI bus delete failed; retaining display resources");
+            MYBOT_LOGE(TAG, "DSI bus delete failed; retaining resources");
             return -1;
         }
         s_lcd.bus = NULL;
     }
-    int power_result = panel_power_off();
-
-    /* display_deinit returns both the current and update buffers via the callback. */
-    for (unsigned int index = 0; index < LCD_FRAME_COUNT; ++index) {
-        aosl_atomic_set(&s_lcd.frame_busy[index], 0);
-        if (s_lcd.frames[index]) {
-            bk_frame_buffer_free(s_lcd.frames[index]);
-            s_lcd.frames[index] = NULL;
+    if (s_lcd.view_created) {
+        mybot_lvgl_view_destroy();
+        s_lcd.view_created = false;
+    }
+    if (s_lcd.display) {
+        lv_display_delete(s_lcd.display);
+        s_lcd.display = NULL;
+    }
+    if (s_lcd.draw_buffer) {
+        hsram_free(s_lcd.draw_buffer);
+        s_lcd.draw_buffer = NULL;
+    }
+    for (unsigned int i = 0; i < LCD_FRAME_COUNT; ++i) {
+        aosl_atomic_set(&s_lcd.frame_busy[i], 0);
+        if (s_lcd.frames[i]) {
+            bk_frame_buffer_free(s_lcd.frames[i]);
+            s_lcd.frames[i] = NULL;
         }
     }
-    if (s_lcd.frame_done) {
-        (void)rtos_deinit_semaphore(&s_lcd.frame_done);
-        s_lcd.frame_done = NULL;
+    if (s_lcd.cpu_vote_owned) {
+        if (bk_pm_module_vote_cpu_freq(PM_DEV_ID_LVGL, PM_CPU_FRQ_DEFAULT) != BK_OK) {
+            MYBOT_LOGW(TAG, "failed to release UI CPU frequency vote");
+            return -1;
+        }
+        s_lcd.cpu_vote_owned = false;
     }
-    s_lcd.next_frame = 0;
-    return power_result;
+    return panel_power_off();
 }
 
 int bk7259_lcd_prepare(void)
 {
-    if (!ensure_lcd_lock() || rtos_lock_mutex(&s_lcd_lock) != BK_OK) {
+    /* This entry point is called by the sole product startup/shutdown owner. */
+    if ((!s_lifecycle_lock && rtos_init_mutex(&s_lifecycle_lock) != BK_OK) ||
+        (!s_snapshot_lock && rtos_init_mutex(&s_snapshot_lock) != BK_OK) ||
+        rtos_lock_mutex(&s_lifecycle_lock) != BK_OK) {
         return -1;
     }
-    if (s_lcd.prepared) {
-        rtos_unlock_mutex(&s_lcd_lock);
+    if (rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
+        unlock(&s_lifecycle_lock);
+        return -1;
+    }
+    if (s_lcd.prepared && !aosl_atomic_read(&s_lcd.stopping)) {
+        unlock(&s_snapshot_lock);
+        unlock(&s_lifecycle_lock);
         return 0;
     }
-    if (resources_owned() && teardown_locked() < 0) {
-        rtos_unlock_mutex(&s_lcd_lock);
-        return -1;
-    }
-
+    /* A worker that exited on an RTOS error must be collected before retrying. */
     s_lcd.accepting = false;
     s_lcd.sdk_attached = false;
+    s_lcd.prepared = false;
+    s_lcd.pending = false;
+    unlock(&s_snapshot_lock);
+    if (resources_owned() && teardown_locked() < 0) {
+        unlock(&s_lifecycle_lock);
+        return -1;
+    }
+    s_lcd.composing = -1;
+    s_lcd.previous = -1;
+    s_lcd.discard_refresh = false;
+    s_lcd.redraw_needed = false;
+    s_lcd.flush_fault = false;
+    aosl_atomic_set(&s_lcd.stopping, 0);
     if (!s_frame_buffer_initialized) {
         bk_frame_buffer_init();
         s_frame_buffer_initialized = true;
     }
-    if (rtos_init_semaphore(&s_lcd.frame_done, LCD_FRAME_COUNT) != BK_OK) {
+    /* Three bounded, process-lifetime notifications reused across prepare /
+     * shutdown. In particular worker_done and frame_done may be given in an
+     * ISR/on another core while the notified task wakes. */
+    if ((!s_lcd.frame_done && rtos_init_semaphore_ex(&s_lcd.frame_done, LCD_FRAME_COUNT, 0) != BK_OK) ||
+        (!s_lcd.wake && rtos_init_semaphore_ex(&s_lcd.wake, 1, 0) != BK_OK) ||
+        (!s_lcd.worker_done && rtos_init_semaphore_ex(&s_lcd.worker_done, 1, 0) != BK_OK)) {
         goto failed;
     }
-    for (unsigned int index = 0; index < LCD_FRAME_COUNT; ++index) {
-        s_lcd.frames[index] = bk_frame_buffer_malloc(MEM_SLAB_HEAP_UNCODED, LCD_FRAME_BYTES);
-        if (!s_lcd.frames[index]) {
-            MYBOT_LOGE(TAG, "failed to allocate framebuffer %u", index);
+    while (rtos_get_semaphore(&s_lcd.frame_done, 0) == BK_OK) {}
+    while (rtos_get_semaphore(&s_lcd.wake, 0) == BK_OK) {}
+    for (unsigned int i = 0; i < LCD_FRAME_COUNT; ++i) {
+        s_lcd.frames[i] = bk_frame_buffer_malloc(MEM_SLAB_HEAP_UNCODED, LCD_FRAME_BYTES);
+        if (!s_lcd.frames[i]) {
+            MYBOT_LOGE(TAG, "failed to allocate scanout buffer %u", i);
             goto failed;
         }
+        memset(s_lcd.frames[i], 0, LCD_FRAME_BYTES);
     }
-    if (panel_power_on() < 0 || bk_display_dsi_bus_new(&s_lcd.bus, NULL) != AVDK_ERR_OK) {
+    s_lcd.draw_buffer = hsram_malloc(LCD_DRAW_BYTES);
+    if (!s_lcd.draw_buffer || panel_power_on() < 0 ||
+        bk_display_dsi_bus_new(&s_lcd.bus, NULL) != AVDK_ERR_OK) {
         goto failed;
     }
-
     const bk_lcd_panel_config_t panel_config = {.reset_pin = LCD_RESET_GPIO};
-    if (bk_lcd_mipi_panel_new(s_lcd.bus, &panel_config,
-                              &lcd_device_jd9855_mipi_320x385, &s_lcd.panel) != BK_OK) {
-        goto failed;
-    }
-    if (bk_display_dpu_ctlr_new(&s_lcd.controller, s_lcd.panel, &s_controller_config) !=
-        AVDK_ERR_OK) {
-        goto failed;
-    }
-    if (bk_display_init(s_lcd.controller) != AVDK_ERR_OK) {
+    if (bk_lcd_mipi_panel_new(s_lcd.bus, &panel_config, &lcd_device_jd9855_mipi_320x385,
+                            &s_lcd.panel) != BK_OK ||
+        bk_display_dpu_ctlr_new(&s_lcd.controller, s_lcd.panel, &s_controller_config) != AVDK_ERR_OK ||
+        bk_display_init(s_lcd.controller) != AVDK_ERR_OK) {
         goto failed;
     }
     s_lcd.controller_inited = true;
@@ -907,100 +571,175 @@ int bk7259_lcd_prepare(void)
         goto failed;
     }
     s_lcd.controller_open = true;
-
-    mybot_lcd_content_t starting = {.screen = MYBOT_LCD_SCREEN_STARTING};
-    if (submit_content_locked(&starting) < 0) {
+    if (bk_pm_module_vote_cpu_freq(PM_DEV_ID_LVGL, PM_CPU_FRQ_480M) != BK_OK) {
         goto failed;
     }
-    rtos_delay_milliseconds(20);
-    if (set_backlight(true) < 0) {
+    s_lcd.cpu_vote_owned = true;
+    if (!s_lvgl_initialized) {
+        lv_init();
+        configure_draw_allocators();
+        s_lvgl_initialized = true;
+    }
+    lv_log_register_print_cb(lvgl_log);
+    lv_tick_set_cb(lcd_tick);
+    s_lcd.display = lv_display_create(LCD_LOGICAL_WIDTH, LCD_LOGICAL_HEIGHT);
+    if (!s_lcd.display) {
+        goto failed;
+    }
+    lv_display_set_color_format(s_lcd.display, LV_COLOR_FORMAT_RGB565);
+    lv_display_set_buffers(s_lcd.display, s_lcd.draw_buffer, NULL, LCD_DRAW_BYTES,
+                           LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(s_lcd.display, lcd_flush);
+    if (mybot_lvgl_view_create(s_lcd.display) < 0) {
+        goto failed;
+    }
+    s_lcd.view_created = true;
+    lv_refr_now(s_lcd.display);
+    if (s_lcd.flush_fault || set_backlight(true) < 0) {
+        goto failed;
+    }
+    if (rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
+        goto failed;
+    }
+    s_lcd.latest = (mybot_lcd_content_t){.screen = MYBOT_LCD_SCREEN_STARTING};
+    s_lcd.provisioning_ssid[0] = '\0';
+    s_lcd.pending = false;
+    s_lcd.accepting = true;
+    s_lcd.sdk_attached = false;
+    /* No other LVGL calls after this transfer until worker_done. */
+    bk_err_t ret = rtos_create_hsram_thread(&s_lcd.worker, LCD_UI_PRIORITY, "mybot_ui",
+                                           ui_worker, LCD_UI_STACK_BYTES, NULL);
+    if (ret != BK_OK) {
+        s_lcd.worker = NULL;
+        s_lcd.accepting = false;
+        unlock(&s_snapshot_lock);
         goto failed;
     }
     s_lcd.prepared = true;
-    s_lcd.accepting = true;
-    MYBOT_LOGI(TAG, "JD9855 MIPI display ready");
-    rtos_unlock_mutex(&s_lcd_lock);
+    unlock(&s_snapshot_lock);
+    MYBOT_LOGI(TAG, "LVGL UI ready: %ux%u RGB565, scanout=%u stripe=%u stack=%u bytes",
+               LCD_LOGICAL_WIDTH, LCD_LOGICAL_HEIGHT, (unsigned)(LCD_FRAME_BYTES * 2U),
+               (unsigned)LCD_DRAW_BYTES, (unsigned)LCD_UI_STACK_BYTES);
+    unlock(&s_lifecycle_lock);
     return 0;
 
 failed:
-    MYBOT_LOGE(TAG, "display preparation failed");
+    MYBOT_LOGE(TAG, "LVGL display preparation failed");
     (void)teardown_locked();
-    s_lcd.prepared = false;
-    rtos_unlock_mutex(&s_lcd_lock);
+    unlock(&s_lifecycle_lock);
     return -1;
 }
 
 void bk7259_lcd_shutdown(void)
 {
-    if (!s_lcd_lock || rtos_lock_mutex(&s_lcd_lock) != BK_OK) {
+    if (!s_lifecycle_lock || rtos_lock_mutex(&s_lifecycle_lock) != BK_OK) {
+        return;
+    }
+    if (rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
+        unlock(&s_lifecycle_lock);
         return;
     }
     s_lcd.accepting = false;
     s_lcd.sdk_attached = false;
+    s_lcd.prepared = false;
+    s_lcd.pending = false;
+    unlock(&s_snapshot_lock);
     if (resources_owned()) {
-        int result = teardown_locked();
-        s_lcd.prepared = false;
-        if (result == 0) {
-            MYBOT_LOGI(TAG, "display shut down");
+        MYBOT_LOGI(TAG, "LVGL UI stopping");
+        if (teardown_locked() == 0) {
+            MYBOT_LOGI(TAG, "LVGL UI stopped");
         }
     }
-    rtos_unlock_mutex(&s_lcd_lock);
+    unlock(&s_lifecycle_lock);
+}
+
+static bool valid_content(const mybot_lcd_content_t *content)
+{
+    if (!content || content->screen < MYBOT_LCD_SCREEN_STARTING ||
+        content->screen >= MYBOT_LCD_SCREEN_COUNT) {
+        return false;
+    }
+    return content->screen != MYBOT_LCD_SCREEN_PAIR_CODE ||
+           memchr(content->pair_code, '\0', sizeof(content->pair_code)) != NULL;
+}
+
+/* Caller holds snapshot lock. No borrowed SDK pointer crosses this boundary. */
+static int publish_content(const mybot_lcd_content_t *content)
+{
+    if (!s_lcd.accepting || aosl_atomic_read(&s_lcd.stopping)) {
+        return -1;
+    }
+    s_lcd.latest = *content;
+    s_lcd.pending = true;
+    notify(&s_lcd.wake);
+    return 0;
 }
 
 int bk7259_lcd_show_screen(mybot_lcd_screen_t screen)
 {
-    if (screen == MYBOT_LCD_SCREEN_PAIR_CODE) {
-        /* A pair-code screen is only valid with the server-provided six
-         * digit value; do not render a misleading placeholder. */
-        return -1;
-    }
-
     mybot_lcd_content_t content = {.screen = screen};
-
-    if (!s_lcd_lock || rtos_lock_mutex(&s_lcd_lock) != BK_OK) {
+    if (screen == MYBOT_LCD_SCREEN_PAIR_CODE || !valid_content(&content) ||
+        !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
         return -1;
     }
-    int result = s_lcd.prepared && s_lcd.accepting ? submit_content_locked(&content) : -1;
-    rtos_unlock_mutex(&s_lcd_lock);
-    return result;
+    int ret = publish_content(&content);
+    unlock(&s_snapshot_lock);
+    return ret;
+}
+
+void bk7259_lcd_set_provisioning_ssid(const char *ssid)
+{
+    if (!ssid || !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
+        return;
+    }
+    if (s_lcd.accepting) {
+        size_t len = strnlen(ssid, sizeof(s_lcd.provisioning_ssid) - 1U);
+        memcpy(s_lcd.provisioning_ssid, ssid, len);
+        s_lcd.provisioning_ssid[len] = '\0';
+        s_lcd.pending = true;
+        notify(&s_lcd.wake);
+    }
+    unlock(&s_snapshot_lock);
 }
 
 static int lcd_sdk_init(void **out_context)
 {
-    if (!out_context || !s_lcd_lock || rtos_lock_mutex(&s_lcd_lock) != BK_OK) {
+    if (!out_context || !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
         return -1;
     }
     *out_context = NULL;
-    if (!s_lcd.prepared || !s_lcd.accepting || s_lcd.sdk_attached) {
-        rtos_unlock_mutex(&s_lcd_lock);
-        return -1;
+    int ret = -1;
+    if (s_lcd.prepared && s_lcd.accepting && !s_lcd.sdk_attached &&
+        !aosl_atomic_read(&s_lcd.stopping)) {
+        s_lcd.sdk_attached = true;
+        *out_context = &s_lcd;
+        ret = 0;
     }
-    s_lcd.sdk_attached = true;
-    *out_context = &s_lcd;
-    rtos_unlock_mutex(&s_lcd_lock);
-    return 0;
+    unlock(&s_snapshot_lock);
+    return ret;
 }
 
 static int lcd_sdk_render(void *context, const mybot_lcd_content_t *content)
 {
-    if (context != &s_lcd || !content || !s_lcd_lock ||
-        rtos_lock_mutex(&s_lcd_lock) != BK_OK) {
+    if (context != &s_lcd || !valid_content(content) || !s_snapshot_lock ||
+        rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
         return -1;
     }
-    int result = s_lcd.prepared && s_lcd.accepting && s_lcd.sdk_attached
-                     ? submit_content_locked(content)
-                     : -1;
-    rtos_unlock_mutex(&s_lcd_lock);
-    return result;
+    int ret = s_lcd.sdk_attached ? publish_content(content) : -1;
+    unlock(&s_snapshot_lock);
+    return ret;
 }
 
 static void lcd_sdk_destroy(void *context)
 {
-    if (context != &s_lcd || !s_lcd_lock || rtos_lock_mutex(&s_lcd_lock) != BK_OK) {
+    if (context != &s_lcd || !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
         return;
     }
+    /* Product UI remains alive for provisioning. Clear queued SDK work before
+     * allowing a new product-owned screen; already applied content is a copy. */
     s_lcd.sdk_attached = false;
-    rtos_unlock_mutex(&s_lcd_lock);
+    s_lcd.pending = false;
+    unlock(&s_snapshot_lock);
 }
 
 const mybot_lcd_ops_t g_mybot_bk7259_lcd_ops = {

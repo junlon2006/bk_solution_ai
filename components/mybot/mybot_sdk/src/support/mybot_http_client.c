@@ -869,12 +869,13 @@ static int http_request(const char *method, const char *url, const char *content
         return -1;
     }
 
-    /* Send the request. */
     if (parts.use_tls) {
         const char *body = req_body ? req_body : "";
         size_t body_len = strlen(body);
         AOSL_LOG_NTC("[HTTPS] request body len=%zu: %.*s", body_len, (int)body_len, body);
     }
+
+    /* Send the request. */
     int ret = send_all(&stream, req, (size_t)req_len, deadline);
     aosl_hal_free(req);
     if (ret < 0) {

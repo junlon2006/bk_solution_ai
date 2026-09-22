@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "bk7259_wifi_internal.h"
+#include "bk7259_ops.h"
 
 #include <common/bk_err.h>
 #include "bk7259_platform_log.h"
@@ -150,6 +151,7 @@ static int start_softap(portal_context_t *ctx) {
     }
 
     ctx->ap_started = true;
+    bk7259_lcd_set_provisioning_ssid(ctx->ap_ssid);
     MYBOT_LOGI(TAG, "SoftAP started");
     return 0;
 }
@@ -163,6 +165,7 @@ static int stop_softap(portal_context_t *ctx) {
         return -1;
     }
     ctx->ap_started = false;
+    bk7259_lcd_set_provisioning_ssid("");
     MYBOT_LOGI(TAG, "SoftAP stopped");
     return 0;
 }
