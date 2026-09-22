@@ -39,6 +39,7 @@
 
 #define TAG "mybot_display"
 #define LOGE(...) MYBOT_LOGE(TAG, ##__VA_ARGS__)
+#define LOGD(...) MYBOT_LOGD(TAG, ##__VA_ARGS__)
 #define LOGW(...) MYBOT_LOGW(TAG, ##__VA_ARGS__)
 #define LOGI(...) MYBOT_LOGI(TAG, ##__VA_ARGS__)
 
@@ -544,7 +545,7 @@ static bk_err_t flush_complete_callback(void *frame) {
     trace_id = panel_frame->trace_id;
     s_display.panel_completed[panel_frame->slot][panel_frame->panel] = true;
     rtos_unlock_mutex(&s_display.frame_lock);
-    LOGI("trace=%u flush complete: slot=%u LCD%u", (unsigned int)trace_id,
+    LOGD("trace=%u flush complete: slot=%u LCD%u", (unsigned int)trace_id,
          panel_frame->slot, panel_frame->panel);
     rtos_set_semaphore(&s_display.flush_done);
     return BK_OK;
@@ -600,7 +601,7 @@ static int submit_frame(unsigned int index, uint32_t trace_id) {
     }
     rtos_unlock_mutex(&s_display.frame_lock);
     for (unsigned int panel = 0; panel < DISPLAY_COUNT; ++panel) {
-        LOGI("trace=%u flush submit: slot=%u LCD%u", (unsigned int)trace_id, index,
+        LOGD("trace=%u flush submit: slot=%u LCD%u", (unsigned int)trace_id, index,
              panel);
         if (bk_display_flush(s_display.controllers[panel],
                              &s_display.frames[index][panel].frame,
@@ -612,7 +613,7 @@ static int submit_frame(unsigned int index, uint32_t trace_id) {
             rtos_unlock_mutex(&s_display.frame_lock);
             result = -1;
         } else {
-            LOGI("trace=%u flush accepted: slot=%u LCD%u",
+            LOGD("trace=%u flush accepted: slot=%u LCD%u",
                  (unsigned int)trace_id, index, panel);
         }
     }
@@ -623,12 +624,12 @@ static int render_next_frame(const display_command_t *command) {
     unsigned int index = s_display.next_frame;
     int result;
 
-    LOGI("trace=%u frame selected: slot=%u", (unsigned int)command->trace_id, index);
+    LOGD("trace=%u frame selected: slot=%u", (unsigned int)command->trace_id, index);
     if (wait_until_frame_available(index) < 0) {
         return -1;
     }
     render_command(index, command);
-    LOGI("trace=%u render complete: slot=%u", (unsigned int)command->trace_id, index);
+    LOGD("trace=%u render complete: slot=%u", (unsigned int)command->trace_id, index);
     result = submit_frame(index, command->trace_id);
     s_display.next_frame ^= 1u;
     return result;
@@ -667,10 +668,10 @@ static void display_worker_main(beken_thread_arg_t arg) {
         }
 
         if (command.type == DISPLAY_COMMAND_PAIR_CODE) {
-            LOGI("trace=%u dequeued: state=pair_code",
+            LOGD("trace=%u dequeued: state=pair_code",
                  (unsigned int)command.trace_id);
         } else {
-            LOGI("trace=%u dequeued: state=%s", (unsigned int)command.trace_id,
+            LOGD("trace=%u dequeued: state=%s", (unsigned int)command.trace_id,
                  screen_name(command.screen));
         }
         s_display.command_result = render_next_frame(&command);
@@ -678,10 +679,10 @@ static void display_worker_main(beken_thread_arg_t arg) {
             LOGE("trace=%u command failed, type=%d",
                  (unsigned int)command.trace_id, command.type);
         } else if (command.type == DISPLAY_COMMAND_PAIR_CODE) {
-            LOGI("trace=%u render submitted: state=pair_code",
+            LOGD("trace=%u render submitted: state=pair_code",
                  (unsigned int)command.trace_id);
         } else {
-            LOGI("trace=%u render submitted: state=%s",
+            LOGD("trace=%u render submitted: state=%s",
                  (unsigned int)command.trace_id, screen_name(command.screen));
         }
         rtos_set_semaphore(&s_display.command_done);
@@ -1047,22 +1048,22 @@ static int send_command(const display_command_t *command) {
     }
     queued_command.trace_id = s_display.next_trace_id;
     if (queued_command.type == DISPLAY_COMMAND_PAIR_CODE) {
-        LOGI("trace=%u request: state=pair_code",
+        LOGD("trace=%u request: state=pair_code",
              (unsigned int)queued_command.trace_id);
     } else {
-        LOGI("trace=%u request: state=%s", (unsigned int)queued_command.trace_id,
+        LOGD("trace=%u request: state=%s", (unsigned int)queued_command.trace_id,
              screen_name(queued_command.screen));
     }
     if (rtos_push_to_queue(&s_display.command_queue, &queued_command, BEKEN_WAIT_FOREVER) ==
         BK_OK) {
-        LOGI("trace=%u enqueued", (unsigned int)queued_command.trace_id);
+        LOGD("trace=%u enqueued", (unsigned int)queued_command.trace_id);
         rtos_get_semaphore(&s_display.command_done, BEKEN_NEVER_TIMEOUT);
         result = s_display.command_result;
         if (queued_command.type == DISPLAY_COMMAND_PAIR_CODE) {
-            LOGI("trace=%u request returned: state=pair_code result=%d",
+            LOGD("trace=%u request returned: state=pair_code result=%d",
                  (unsigned int)queued_command.trace_id, result);
         } else {
-            LOGI("trace=%u request returned: state=%s result=%d",
+            LOGD("trace=%u request returned: state=%s result=%d",
                  (unsigned int)queued_command.trace_id,
                  screen_name(queued_command.screen), result);
         }
