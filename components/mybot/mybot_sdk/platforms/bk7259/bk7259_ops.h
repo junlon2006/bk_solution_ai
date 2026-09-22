@@ -29,6 +29,7 @@ void bk7259_key_shutdown(void);
 int bk7259_lcd_prepare(void);
 void bk7259_lcd_shutdown(void);
 int bk7259_lcd_show_screen(mybot_lcd_screen_t screen);
+void bk7259_lcd_set_provisioning_ssid(const char *ssid);
 int bk7259_wifi_prepare(void);
 void bk7259_wifi_shutdown(void);
 

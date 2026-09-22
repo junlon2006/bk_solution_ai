@@ -90,6 +90,9 @@ set(platform_srcs
     platforms/bk7259/bk7259_kv_store.c
     platforms/bk7259/bk7259_key.c
     platforms/bk7259/bk7259_lcd.c
+    platforms/bk7259/display/lvgl_view.cc
+    platforms/bk7259/display/lvgl_assets.c
+    platforms/bk7259/display/lvgl_fonts.c
     platforms/bk7259/bk7259_wifi.c
     platforms/bk7259/bk7259_wifi_portal.c
     platforms/bk7259/bk7259_https.c
@@ -107,6 +110,7 @@ set(mybot_priv_requires
     raw_stream
     aec_v3_algorithm
     bk_display
+    lvgl
     media_service
     bk_frame_buffer
     bk_peripheral
@@ -146,10 +150,10 @@ armino_component_register(
 add_prebuilt_library(mybot_rtsa "${_rtsa_library}" PRIV_REQUIRES mybot_aosl)
 target_link_libraries(${COMPONENT_LIB} INTERFACE mybot_rtsa)
 
-target_compile_features(${COMPONENT_LIB} PRIVATE c_std_99)
+target_compile_features(${COMPONENT_LIB} PRIVATE c_std_99 cxx_std_11)
 target_compile_options(${COMPONENT_LIB} PRIVATE
     -fvisibility=hidden
-    -Werror=incompatible-pointer-types
+    $<$<COMPILE_LANGUAGE:C>:-Werror=incompatible-pointer-types>
 )
 # The device service endpoint is https://; plaintext http:// is rejected.
 target_compile_definitions(${COMPONENT_LIB}

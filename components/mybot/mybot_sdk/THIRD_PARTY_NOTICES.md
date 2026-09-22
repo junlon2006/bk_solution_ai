@@ -12,13 +12,33 @@ except where a source file states otherwise.
 derivatives of cJSON. Their MIT license and Dave Gamble copyright notice are
 retained in those files.
 
-The 4-bit UI glyph coverage in
-`platforms/bk7259/bk7259_lcd_font.inc` is generated from Liberation Sans
-2.1.5 in the pinned BK7259 AVDK tree. The source TTF has SHA256
-`3e81ba4717a115f8d125cd2327d4a1246be2997b9ffd7291a45b6f84ed1a27d1`.
-The derived data is identified internally as the MyBot UI font and does not
-use the reserved font name as its name. It remains under the SIL Open Font
-License 1.1 in `platforms/bk7259/OFL-1.1.txt`.
+## LVGL status view and assets
+
+`platforms/bk7259/display/` adapts the platform-independent status view and
+generated resources from `junlon2006/mybot-esp32` commit
+`19af3bdfaf1dd35461af48def8f9558e3503e755`. File provenance, local adaptations,
+and resource limits are recorded in `platforms/bk7259/display/SOURCES.md`.
+The following asset paths are relative to `platforms/bk7259/`.
+
+- The view is MIT-licensed. Its original xiaozhi-esp32 layout attribution and
+  notices are preserved in `display/assets/licenses/LVGL_VIEW_LICENSE.txt`;
+  the asset API header retains Apache-2.0.
+- `display/lvgl_fonts.c` contains the MyBot UI Sans 20-pixel subset derived
+  from Source Han Sans SC Normal, copyright 2014-2021 Adobe. It is licensed
+  under SIL OFL-1.1 in `display/assets/licenses/LVGL_VIEW_FONT_LICENSE.txt`.
+  The generated data is unchanged from the recorded ESP32 revision and uses
+  the distinct MyBot UI Sans name.
+- `display/lvgl_assets.c` contains four rasterized Noto Color Emoji glyphs,
+  copyright 2021 Google Inc., licensed under SIL OFL-1.1 in
+  `display/assets/ui/noto_emoji/LICENSE.txt`. Upstream revision and source
+  hashes are preserved in `display/assets/ui/noto_emoji/SOURCES.json`.
+
+The LVGL 9.5.0 implementation and built-in fonts are consumed from the
+repository's pinned `bk_avdk_smp/ap/components/lvgl` component. Its license is
+recorded in that component's `LICENCE.txt`; source-specific notices remain
+applicable. The BK7259 view does not copy the ESP-IDF display driver.
+
+## Voice prompts
 
 The embedded Chinese and English Ogg/Opus prompt assets under
 `projects/mybot/assets/` are derived from the MIT-licensed `xiaozhi-esp32`

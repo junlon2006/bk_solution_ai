@@ -1,5 +1,20 @@
 menu "MyBot BK7259 platform"
 
+    config MYBOT_LVGL_UI_ANIMATIONS
+        bool "Animate MyBot status indicators"
+        default y
+        depends on LVGL && LVGL_V9
+        help
+            Animate the listening, thinking and speaking indicators at up to
+            10 frames per second in the product-owned UI thread.
+
+    config MYBOT_LVGL_UI_LIGHT_THEME
+        bool "Use MyBot light UI theme"
+        default n
+        depends on LVGL && LVGL_V9
+        help
+            Use a light background. The default is the dark MyBot theme.
+
     config MYBOT_VIDEO
         bool "Enable MyBot encoded video uplink"
         default n
@@ -55,8 +70,9 @@ menu "MyBot BK7259 platform"
         prompt "MyBot device language"
         default MYBOT_LANGUAGE_ZH_CN
         help
-            Select the language used by the device service and local voice
-            prompts. The endpoint and embedded prompt tag follow this choice.
+            Select the language used by the device service, LCD and local
+            voice prompts. The endpoint and embedded prompt tag follow this
+            choice.
 
         config MYBOT_LANGUAGE_ZH_CN
             bool "Chinese"
