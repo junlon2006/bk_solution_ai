@@ -3,7 +3,8 @@
 本次在原工程接入 `mybot-esp32` 的语义状态视图，默认中文、深色、启用状态动画。
 实现位于 `components/mybot/mybot_sdk/platforms/bk7259/{bk7259_lcd.c,display/}`；
 项目配置为 `ap/lv_conf_custom.h` 和 `ap/config/bk7259_ap/defconfig`。
-SSID 由配网模块复制投递。SDK 的 `include/src` 快照、AOSL 和 AVDK 源码未因本次 UI 移植修改。
+SSID 由配网模块复制投递。SDK 的 `include/src` 快照已单独同步到锁定版本；AOSL 和 AVDK 源码
+未因本次 UI 移植修改。
 旧直接渲染字体及其独立许可证已删除，可从 Git 历史恢复；新资源许可见
 `components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md`。
 
@@ -12,8 +13,9 @@ SSID 由配网模块复制投递。SDK 的 `include/src` 快照、AOSL 和 AVDK 
 - AVDK：`239c151bf4ba239bf8ebc1a178df0a8b659b55bd`，工作树保持干净，使用其中的 LVGL 9.5.0。
 - Solution：`9cbfb976acdf043b01dde91daf1889a54e66d122`，改动留在工作树，未提交或更新根 gitlink。
 - ESP32 视图来源：`19af3bdfaf1dd35461af48def8f9558e3503e755`；未修改参考工程。
-- MyBot SDK：`1baee9a61ddaa4c4b7b72406fa6c8a0503f4b61d` 加 `SDK_REVISION` 已记录的两项日志补丁。
-  `include/src` SHA256 复核为 `ced10c4a36a65635314f4b741c6a57023fa12d73dbe59a332b370c6b684e77de`。
+- MyBot SDK：`4ae239c804257f8b5c557e5879b54d9a88d80847`，RTC 日志级别和 AOSL 恢复已包含在
+  上游快照，HTTPS body 日志仍由 `SDK_REVISION` 记录。`include/src` SHA256 复核为
+  `84a5a0a015de7be6a91658ebc3de1f6958a8e595750d859426dd3a7dae1aa76c`。
 - AOSL 基线：`84e086084ebcd0ae2455a0ce5721950c5fe2e656` 加 `AOSL_REVISION` 已记录的 BK7259 补丁。
   内容 SHA256 复核为 `2e9fc3fa5571972fd31c1ab64546477a98550b6b210e38fec181c0f4daeae64e`。
 - 既有 RTSA 包：BK7259 v1.10.1 build 1278380，未更换；完整构建保留其头文件和库的哈希校验。
