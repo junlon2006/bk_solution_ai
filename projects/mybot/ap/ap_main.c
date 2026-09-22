@@ -3,7 +3,7 @@
 #include <components/bk_uid.h>
 #include <components/log.h>
 #include <media_service.h>
-#include <mbedtls/md5.h>
+#include <mbedtls/md.h>
 #include <os/os.h>
 #include <api/aosl.h>
 
@@ -19,6 +19,11 @@
 #define TAG "mybot"
 #define MYBOT_POLL_INTERVAL_MS 100
 #define MYBOT_APP_TASK_STACK_SIZE (16 * 1024)
+#define DEVICE_ID_DIGEST_BYTES 12
+
+/* Use a compact HMAC identity with a BK7259-specific derivation domain. The
+ * visible prefix separates this platform namespace from other device IDs. */
+static const char k_device_id_hmac_key[] = "mybot-bk7259-device-id-v1";
 
 /* The SDK generates this in the project ELF source as __DATE__ " " __TIME__,
  * so it carries the build time of the image that is actually running. */
@@ -76,18 +81,19 @@ static void mybot_log_state_transition(mybot_state_t *last_state, bool *valid)
 }
 
 /*
- * Product identity. The device id follows the BK725x MyBot controller rule
- * (mybot_controller_bk725x.c build_device_config()): the 32-byte per-chip
- * device UID, read from OTP by the CP and published through bk_uid, is hashed
- * with MD5 and hex-encoded to 32 lowercase characters. The server base follows
- * the selected language, the firmware version is the SDK's own version, and the
+ * Product identity: HMAC-SHA256 over the stable per-chip UID, retaining the
+ * first 12 digest bytes as uppercase hex. BK7259 uses its own derivation key
+ * and visible prefix. The server base follows the selected language, the
+ * firmware version is the SDK's own version, and the
  * hardware model is fixed by this port. None of them is a Kconfig value.
  */
 static int mybot_build_config(void)
 {
-    static const char hex[] = "0123456789abcdef";
-    unsigned char uid[32] = {0};
-    unsigned char digest[16];
+    uint8_t uid[32] = {0};
+    uint8_t digest[32];
+    char digest_hex[DEVICE_ID_DIGEST_BYTES * 2 + 1];
+    const mbedtls_md_info_t *sha256 = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    int written;
 
     s_config = (mybot_config_t){0};
     (void)snprintf(s_config.server_base, sizeof(s_config.server_base), "%s",
@@ -98,22 +104,24 @@ static int mybot_build_config(void)
                    "mybot-bk7259");
 
     if (bk_uid_get_data(uid) != BK_OK) {
-        /* The UID is the only source of the device identity: nothing here
-         * stands in for it, and a device without an identity can be neither
-         * provisioned nor started. */
         BK_LOGE(TAG, "device UID unavailable; no device identity\r\n");
         return -1;
     }
-    if (mbedtls_md5(uid, sizeof(uid), digest) != 0) {
-        BK_LOGE(TAG, "failed to hash the device UID\r\n");
+    if (!sha256 ||
+        mbedtls_md_hmac(sha256,
+                        (const unsigned char *)k_device_id_hmac_key,
+                        sizeof(k_device_id_hmac_key) - 1U,
+                        uid, sizeof(uid), digest) != 0) {
+        BK_LOGE(TAG, "failed to derive device identity\r\n");
         return -1;
     }
-    for (size_t i = 0; i < sizeof(digest); ++i) {
-        s_config.device_id[i * 2] = hex[digest[i] >> 4];
-        s_config.device_id[i * 2 + 1] = hex[digest[i] & 0x0f];
+    for (size_t i = 0; i < DEVICE_ID_DIGEST_BYTES; ++i) {
+        (void)snprintf(&digest_hex[i * 2], 3, "%02X", digest[i]);
     }
-    s_config.device_id[sizeof(digest) * 2] = '\0';
-    return 0;
+    digest_hex[sizeof(digest_hex) - 1] = '\0';
+    written = snprintf(s_config.device_id, sizeof(s_config.device_id),
+                       "BK7259-%s", digest_hex);
+    return written > 0 && (size_t)written < sizeof(s_config.device_id) ? 0 : -1;
 }
 
 static int mybot_run(void)
