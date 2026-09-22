@@ -29,7 +29,7 @@
 #include <mybot_provisioning.h>
 #include <mybot_sdcard_msc_bk725x.h>
 #include <mybot_controller.h>
-#include <mbedtls/md5.h>
+#include <mbedtls/md.h>
 #include <os/os.h>
 
 #include <stdbool.h>
@@ -39,6 +39,7 @@
 #define CONTROLLER_THREAD_PRIORITY 2
 #define CONTROLLER_THREAD_STACK_SIZE 4096
 #define CONTROLLER_POLL_MS 100
+#define DEVICE_ID_DIGEST_BYTES 12
 
 #define TAG "mybot_ctrl"
 
@@ -61,6 +62,7 @@ typedef struct {
 } app_runtime_t;
 
 static beken_thread_t s_controller_thread;
+static const char k_device_id_hmac_key[] = "mybot-bk7258-device-id-v1";
 
 static void show_display_screen(const app_runtime_t *runtime, mybot_display_screen_t screen) {
     if (runtime->display_initialized && mybot_display_show_screen(screen, 0) < 0) {
@@ -115,25 +117,33 @@ static void log_state_transition(mybot_state_t *last_state, bool *valid) {
 }
 
 static int build_device_config(mybot_config_t *config) {
-    static const char hex[] = "0123456789abcdef";
     unsigned char uid[32] = {0};
-    unsigned char digest[16];
+    unsigned char digest[32];
+    char digest_hex[DEVICE_ID_DIGEST_BYTES * 2 + 1];
+    const mbedtls_md_info_t *sha256 = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    int written;
 
     if (!config || bk_uid_get_data(uid) != BK_OK) {
         MYBOT_LOGE(TAG, "failed to read device UID");
         return -1;
     }
-    if (mbedtls_md5(uid, sizeof(uid), digest) != 0) {
-        MYBOT_LOGE(TAG, "failed to hash device UID");
+    if (!sha256 ||
+        mbedtls_md_hmac(sha256, (const unsigned char *)k_device_id_hmac_key,
+                        sizeof(k_device_id_hmac_key) - 1U, uid, sizeof(uid), digest) != 0) {
+        MYBOT_LOGE(TAG, "failed to derive device identity");
         return -1;
     }
 
     *config = (mybot_config_t){0};
-    for (size_t i = 0; i < 16; ++i) {
-        config->device_id[i * 2] = hex[digest[i] >> 4];
-        config->device_id[i * 2 + 1] = hex[digest[i] & 0x0f];
+    for (size_t i = 0; i < DEVICE_ID_DIGEST_BYTES; ++i) {
+        (void)snprintf(&digest_hex[i * 2], 3, "%02X", digest[i]);
     }
-    config->device_id[32] = '\0';
+    digest_hex[sizeof(digest_hex) - 1] = '\0';
+    written = snprintf(config->device_id, sizeof(config->device_id), "BK7258-%s", digest_hex);
+    if (written <= 0 || (size_t)written >= sizeof(config->device_id)) {
+        MYBOT_LOGE(TAG, "generated device identity is too long");
+        return -1;
+    }
 
     int length = snprintf(config->server_base, sizeof(config->server_base), "%s",
                           MYBOT_SERVER_BASE);
