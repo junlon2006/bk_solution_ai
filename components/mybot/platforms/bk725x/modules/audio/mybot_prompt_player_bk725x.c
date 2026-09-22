@@ -18,8 +18,6 @@
 
 #define TAG "mybot_prompt"
 
-#define PROMPT_THREAD_PRIORITY 2
-#define PROMPT_THREAD_STACK_SIZE 8192
 /* ~16 s of s16le mono, far beyond any provisioning prompt. */
 #define PROMPT_MAX_FRAMES (512U * 1024U / 2U)
 #define PROMPT_RATE_HZ 16000
@@ -33,18 +31,7 @@
 #define SUCCESS_PROMPT_PATH                                                             \
     MYBOT_ASSETS_DIR "/locales/" MYBOT_LANGUAGE_TAG "/success.ogg"
 
-static beken_thread_t s_prompt_thread;
-static beken_semaphore_t s_stop_requested;
 static const char *s_prompt_path;
-
-static bool stop_requested(uint32_t timeout_ms) {
-    if (rtos_get_semaphore(&s_stop_requested, timeout_ms) != BK_OK) {
-        return false;
-    }
-    /* Keep cancellation sticky across later checks in the worker. */
-    rtos_set_semaphore(&s_stop_requested);
-    return true;
-}
 
 static int load_pcm(int16_t **pcm, int *frames) {
     mybot_asset_t asset;
@@ -101,7 +88,7 @@ static int play_pcm(const int16_t *pcm, int frames) {
     }
     playback_started = true;
 
-    while (offset < frames && !stop_requested(BEKEN_NO_WAIT)) {
+    while (offset < frames) {
         int requested = frames - offset;
         if (requested > PROMPT_FRAMES_PER_WRITE) {
             requested = PROMPT_FRAMES_PER_WRITE;
@@ -123,12 +110,11 @@ static int play_pcm(const int16_t *pcm, int frames) {
     }
 
     if (offset == frames) {
-        /* Let the raw-stream and speaker buffers drain; a stop request wakes this early. */
-        (void)stop_requested(PROMPT_DRAIN_MS);
+        /* Let the raw-stream and speaker buffers drain. */
+        rtos_delay_milliseconds(PROMPT_DRAIN_MS);
         result = 0;
     } else {
-        MYBOT_LOGI(TAG, "prompt playback cancelled");
-        result = 0;
+        result = -1;
     }
 
 cleanup:
@@ -139,62 +125,25 @@ cleanup:
     return result;
 }
 
-static void prompt_thread_main(beken_thread_arg_t arg) {
+static int play_prompt_sync(const char *path) {
     int16_t *pcm = NULL;
     int frames = 0;
+    int result = -1;
 
-    (void)arg;
-    MYBOT_LOGI(TAG, "prompt worker started: %s", s_prompt_path);
-    if (!stop_requested(BEKEN_NO_WAIT) && load_pcm(&pcm, &frames) == 0 &&
-        !stop_requested(BEKEN_NO_WAIT)) {
-        if (play_pcm(pcm, frames) < 0) {
-            MYBOT_LOGW(TAG, "prompt playback failed");
-        }
+    s_prompt_path = path;
+    if (load_pcm(&pcm, &frames) == 0) {
+        result = play_pcm(pcm, frames);
     }
     if (pcm) {
         psram_free(pcm);
     }
-    MYBOT_LOGI(TAG, "prompt worker stopped");
-    rtos_delete_thread(NULL);
-}
-
-static int start_prompt_thread(const char *path) {
-    mybot_prompt_player_bk725x_stop();
-
-    s_prompt_path = path;
-
-    if (rtos_init_semaphore(&s_stop_requested, 1) != BK_OK) {
-        MYBOT_LOGE(TAG, "failed to initialize stop signal");
-        return -1;
-    }
-    if (rtos_create_psram_thread(&s_prompt_thread, PROMPT_THREAD_PRIORITY, "mybot_prompt",
-                                 prompt_thread_main, PROMPT_THREAD_STACK_SIZE, NULL) != BK_OK) {
-        s_prompt_thread = NULL;
-        rtos_deinit_semaphore(&s_stop_requested);
-        MYBOT_LOGE(TAG, "failed to create prompt worker");
-        return -1;
-    }
-    return 0;
-}
-
-static int play_prompt_sync(const char *path) {
-    if (start_prompt_thread(path) < 0) {
-        return -1;
-    }
-    rtos_thread_join(&s_prompt_thread);
-    s_prompt_thread = NULL;
-    rtos_deinit_semaphore(&s_stop_requested);
-    return 0;
+    s_prompt_path = NULL;
+    return result;
 }
 
 int mybot_prompt_player_bk725x_play_provisioning(void) {
     MYBOT_LOGI(TAG, "play provisioning prompt requested");
-    return start_prompt_thread(PROVISIONING_PROMPT_PATH);
-}
-
-int mybot_prompt_player_bk725x_play_success(void) {
-    MYBOT_LOGI(TAG, "play success prompt requested");
-    return start_prompt_thread(SUCCESS_PROMPT_PATH);
+    return play_prompt_sync(PROVISIONING_PROMPT_PATH);
 }
 
 int mybot_prompt_player_bk725x_play_success_sync(void) {
@@ -203,13 +152,5 @@ int mybot_prompt_player_bk725x_play_success_sync(void) {
 }
 
 void mybot_prompt_player_bk725x_stop(void) {
-    MYBOT_LOGI(TAG, "stop prompt player requested");
-    if (!s_prompt_thread) {
-        return;
-    }
-
-    rtos_set_semaphore(&s_stop_requested);
-    rtos_thread_join(&s_prompt_thread);
-    s_prompt_thread = NULL;
-    rtos_deinit_semaphore(&s_stop_requested);
+    s_prompt_path = NULL;
 }

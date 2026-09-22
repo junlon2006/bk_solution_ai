@@ -6,16 +6,13 @@
 extern "C" {
 #endif
 
-/* Starts the local "enter provisioning mode" PCM prompt asynchronously. */
+/* Plays the local "enter provisioning mode" PCM prompt synchronously. */
 int mybot_prompt_player_bk725x_play_provisioning(void);
-
-/* Starts the local "provisioning success" PCM prompt asynchronously. */
-int mybot_prompt_player_bk725x_play_success(void);
 
 /* Starts the success prompt and waits until it has drained. */
 int mybot_prompt_player_bk725x_play_success_sync(void);
 
-/* Cancels any prompt and waits until its playback resources are released. */
+/* Kept as a lifecycle no-op for controller cleanup compatibility. */
 void mybot_prompt_player_bk725x_stop(void);
 
 #ifdef __cplusplus

@@ -60,6 +60,22 @@ static int publish_playback(bk725x_playback_ctx_t *playback) {
         return -1;
     }
 
+    if (s_active_playback != playback || !playback->published) {
+        MYBOT_LOGE(TAG, "playback owner reservation lost");
+        (void)rtos_unlock_mutex(&s_playback_lock);
+        return -1;
+    }
+    result = 0;
+
+    (void)rtos_unlock_mutex(&s_playback_lock);
+    return result;
+}
+
+static int reserve_playback(bk725x_playback_ctx_t *playback) {
+    if (!playback || ensure_playback_lock() < 0 ||
+        rtos_lock_mutex(&s_playback_lock) != BK_OK) {
+        return -1;
+    }
     if (s_active_playback) {
         MYBOT_LOGE(TAG, "playback owner already active");
         (void)rtos_unlock_mutex(&s_playback_lock);
@@ -67,10 +83,8 @@ static int publish_playback(bk725x_playback_ctx_t *playback) {
     }
     s_active_playback = playback;
     playback->published = true;
-    result = 0;
-
     (void)rtos_unlock_mutex(&s_playback_lock);
-    return result;
+    return 0;
 }
 
 static bool unpublish_playback(bk725x_playback_ctx_t *playback) {
@@ -211,6 +225,11 @@ int mybot_audio_bk725x_playback_init(void **ctx, int rate, int channels, int bit
     playback = psram_zalloc(sizeof(*playback));
     if (!playback) {
         MYBOT_LOGE(TAG, "context allocation failed");
+        return -1;
+    }
+
+    if (reserve_playback(playback) < 0) {
+        psram_free(playback);
         return -1;
     }
 
