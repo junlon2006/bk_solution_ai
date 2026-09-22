@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "mybot_prompt_player_bk725x.h"
 
-#include "mybot_audio_shared_bk725x.h"
+#include "mybot_audio_internal_bk725x.h"
+#include "mybot_audio_playback_bk725x.h"
 #include "mybot_assets.h"
 #include "mybot_ogg_pcm_bk725x.h"
 
@@ -83,21 +84,29 @@ static int play_pcm(const int16_t *pcm, int frames) {
     int offset = 0;
     int consecutive_timeouts = 0;
     int result = -1;
+    void *playback_ctx = NULL;
+    bool playback_started = false;
 
-    /* Use the shared playback pipeline so the prompt and the SDK share
-     * a single speaker path.  The pipeline, ring buffer, power vote and
-     * volume are all managed by the shared module. */
-    if (mybot_audio_bk725x_shared_playback_start() < 0) {
-        MYBOT_LOGE(TAG, "shared playback start failed");
+    if (mybot_audio_bk725x_playback_init(&playback_ctx, PROMPT_RATE_HZ,
+                                         PROMPT_CHANNELS, PROMPT_BITS) < 0) {
+        MYBOT_LOGE(TAG, "prompt playback init failed");
         return -1;
     }
+    if (mybot_audio_bk725x_volume_apply() < 0) {
+        MYBOT_LOGW(TAG, "prompt playback volume apply failed");
+    }
+    if (mybot_audio_bk725x_playback_start(playback_ctx) < 0) {
+        MYBOT_LOGE(TAG, "prompt playback start failed");
+        goto cleanup;
+    }
+    playback_started = true;
 
     while (offset < frames && !stop_requested(BEKEN_NO_WAIT)) {
         int requested = frames - offset;
         if (requested > PROMPT_FRAMES_PER_WRITE) {
             requested = PROMPT_FRAMES_PER_WRITE;
         }
-        int written = mybot_audio_bk725x_shared_playback_write(pcm + offset, requested);
+        int written = mybot_audio_bk725x_playback_write(playback_ctx, pcm + offset, requested);
         if (written < 0) {
             MYBOT_LOGE(TAG, "prompt write failed at frame %d/%d", offset, frames);
             goto cleanup;
@@ -123,7 +132,10 @@ static int play_pcm(const int16_t *pcm, int frames) {
     }
 
 cleanup:
-    /* Leave the shared pipeline running — the SDK will use it later. */
+    if (playback_started) {
+        (void)mybot_audio_bk725x_playback_stop(playback_ctx);
+    }
+    mybot_audio_bk725x_playback_destroy(playback_ctx);
     return result;
 }
 

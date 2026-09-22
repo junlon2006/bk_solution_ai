@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "mybot_audio_playback_bk725x.h"
+#include "mybot_audio_power_bk725x.h"
 
 #include <components/bk_audio/audio_pipeline/audio_element.h>
 #include <components/bk_audio/audio_pipeline/audio_pipeline.h>
@@ -33,6 +34,7 @@ typedef struct {
     bool speaker_registered;
     bool started;
     bool published;
+    bool power_acquired;
 } bk725x_playback_ctx_t;
 
 static beken_mutex_t s_playback_lock;
@@ -58,11 +60,10 @@ static int publish_playback(bk725x_playback_ctx_t *playback) {
         return -1;
     }
 
-    /* The shared playback module may already hold a published pipeline.
-     * Allow multiple publishers; the last one published is the active one
-     * for digital-gain and is-active queries. */
     if (s_active_playback) {
-        s_active_playback->published = false;
+        MYBOT_LOGE(TAG, "playback owner already active");
+        (void)rtos_unlock_mutex(&s_playback_lock);
+        return -1;
     }
     s_active_playback = playback;
     playback->published = true;
@@ -175,6 +176,10 @@ static bool release_playback(bk725x_playback_ctx_t *playback) {
         audio_element_deinit(playback->speaker);
     }
 
+    if (playback->power_acquired) {
+        mybot_audio_bk725x_power_release();
+        playback->power_acquired = false;
+    }
     psram_free(playback);
     return true;
 }
@@ -208,6 +213,12 @@ int mybot_audio_bk725x_playback_init(void **ctx, int rate, int channels, int bit
         MYBOT_LOGE(TAG, "context allocation failed");
         return -1;
     }
+
+    if (mybot_audio_bk725x_power_acquire() < 0) {
+        MYBOT_LOGE(TAG, "audio power acquire failed");
+        goto fail;
+    }
+    playback->power_acquired = true;
 
     playback->pipeline = audio_pipeline_init(&pipeline_cfg);
     if (!playback->pipeline) {

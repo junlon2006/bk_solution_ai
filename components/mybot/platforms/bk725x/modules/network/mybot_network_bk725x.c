@@ -4,8 +4,6 @@
 #include "mybot_wifi_credentials.h"
 #include "mybot_wifi_runtime.h"
 
-#include <mybot_event.h>
-
 #include "mybot_platform_log.h"
 #include <modules/wifi.h>
 #include <os/mem.h>

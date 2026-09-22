@@ -5,7 +5,7 @@
  * The SDK owns the application state machine.  Following the BK7259
  * cross-platform port, this controller keeps a small poll loop at the
  * application boundary: it owns the product modules (display, buttons,
- * STA worker, APSTA provisioning, shared playback) and only starts and
+ * STA worker, APSTA provisioning, and audio prompts) and only starts and
  * stops the SDK, logging the SDK's state-view at observable edges.
  */
 #include <bk725x_platform_adapters.h>
@@ -15,7 +15,6 @@
 #include <mybot/mybot.h>
 #include <mybot/mybot_version.h>
 #include "mybot_language.h"
-#include <mybot_audio_shared_bk725x.h>
 #include <mybot_button.h>
 #include <mybot_connectivity.h>
 #if CONFIG_MYBOT_DEBUG_CPU
@@ -53,10 +52,6 @@ typedef struct {
     bool cpu_monitor_started;
 #endif
     bool display_initialized;
-    bool provisioning_active;
-    bool network_started;
-    bool network_connected;
-    bool sdk_active;
     bool provision_requested;
     bool network_success_prompt_pending;
 } app_runtime_t;
@@ -163,112 +158,60 @@ static void publish_connectivity(mybot_connectivity_event_t event) {
     }
 }
 
-/* Publish connectivity transitions to the SDK Wi-Fi adapter when the STA
- * runtime reports a usable IPv4 connection or loses it. */
-static void update_network_state(app_runtime_t *runtime) {
-    bool connected = mybot_network_is_connected();
+static void controller_wait_for_button(app_runtime_t *runtime);
 
-    if (connected == runtime->network_connected) {
-        return;
-    }
-    runtime->network_connected = connected;
-    publish_connectivity(connected ? MYBOT_CONNECTIVITY_CONNECTED
-                                   : MYBOT_CONNECTIVITY_DISCONNECTED);
-    if (connected) {
-        MYBOT_LOGI(TAG, "network connected");
-        if (!runtime->sdk_active) {
-            show_display_screen(runtime, MYBOT_DISPLAY_SCREEN_STARTING_SERVICES);
-        }
-    } else {
-        MYBOT_LOGW(TAG, "network disconnected");
-    }
-}
-
-static int start_network(app_runtime_t *runtime) {
-    bool configured = false;
-
-    if (mybot_network_is_configured(&configured) < 0) {
-        MYBOT_LOGE(TAG, "failed to inspect saved Wi-Fi credentials");
-        return -1;
-    }
-    if (!configured) {
-        runtime->provision_requested = true;
-        return 0;
-    }
-
-    MYBOT_LOGI(TAG, "starting normal STA networking");
-    runtime->network_connected = false;
-    publish_connectivity(MYBOT_CONNECTIVITY_DISCONNECTED);
-    if (mybot_network_start() < 0) {
-        MYBOT_LOGE(TAG, "normal STA networking start failed");
-        return -1;
-    }
-    runtime->network_started = true;
-    show_display_screen(runtime, MYBOT_DISPLAY_SCREEN_WIFI_DISCONNECTED);
-    return 0;
-}
-
-static void stop_network(app_runtime_t *runtime) {
-    if (!runtime->network_started) {
-        return;
-    }
-    MYBOT_LOGI(TAG, "stopping normal STA networking");
-    runtime->network_started = false;
-    runtime->network_connected = false;
+static int stop_network(void) {
     publish_connectivity(MYBOT_CONNECTIVITY_DISCONNECTED);
     if (mybot_network_stop() < 0) {
         MYBOT_LOGE(TAG, "normal STA networking stop incomplete");
+        return -1;
     }
+    return 0;
 }
 
-static int start_provisioning(app_runtime_t *runtime) {
+static int provision_network(app_runtime_t *runtime) {
     MYBOT_LOGI(TAG, "starting APSTA provisioning");
     if (mybot_provisioning_start(runtime->config.device_id) < 0) {
         MYBOT_LOGE(TAG, "APSTA provisioning start failed");
         return -1;
     }
-    runtime->provisioning_active = true;
     show_display_screen(runtime, MYBOT_DISPLAY_SCREEN_WIFI_PROVISIONING);
 
-    /* Start the shared playback pipeline before the prompt player so the
-     * prompt writes through the same audio path the SDK will use later. */
-    if (mybot_audio_bk725x_shared_playback_start() < 0) {
-        MYBOT_LOGW(TAG, "shared playback start failed, prompt may be silent");
-    }
     if (mybot_prompt_player_bk725x_play_provisioning() < 0) {
         MYBOT_LOGW(TAG, "failed to start provisioning prompt");
     }
+    for (;;) {
+        mybot_provisioning_state_t state = mybot_provisioning_get_state();
+        if (state == MYBOT_PROVISIONING_STATE_COMPLETED) {
+            MYBOT_LOGI(TAG, "APSTA provisioning completed");
+            break;
+        }
+        if (state == MYBOT_PROVISIONING_STATE_FAILED) {
+            MYBOT_LOGE(TAG, "APSTA provisioning failed");
+            mybot_prompt_player_bk725x_stop();
+            (void)mybot_provisioning_stop();
+            return -1;
+        }
+        controller_wait_for_button(runtime);
+    }
+
+    mybot_prompt_player_bk725x_stop();
+    if (mybot_provisioning_stop() < 0) {
+        MYBOT_LOGE(TAG, "APSTA provisioning stop incomplete");
+        return -1;
+    }
+    runtime->provision_requested = false;
+    runtime->network_success_prompt_pending = true;
     return 0;
 }
 
-static void stop_provisioning(app_runtime_t *runtime) {
-    if (!runtime->provisioning_active) {
-        return;
-    }
-    mybot_prompt_player_bk725x_stop();
-    runtime->provisioning_active = false;
-    if (mybot_provisioning_stop() < 0) {
-        MYBOT_LOGE(TAG, "APSTA provisioning stop incomplete");
-    }
-}
-
 static int start_sdk(app_runtime_t *runtime) {
-    if (runtime->sdk_active || !runtime->network_connected) {
-        return 0;
-    }
     mybot_prompt_player_bk725x_stop();
-    if (mybot_audio_bk725x_shared_playback_start() < 0) {
-        MYBOT_LOGE(TAG, "shared playback start failed");
-        return -1;
-    }
     if (runtime->network_success_prompt_pending) {
         if (mybot_prompt_player_bk725x_play_success_sync() < 0) {
             MYBOT_LOGW(TAG, "failed to play provisioning success prompt");
         }
         runtime->network_success_prompt_pending = false;
-    }
-    if (bk725x_platform_adapters_register() < 0) {
-        return -1;
     }
     /* The SDK Wi-Fi adapter consumes this connected snapshot during
      * mybot_start() and immediately forwards it to SDK startup. */
@@ -279,28 +222,26 @@ static int start_sdk(app_runtime_t *runtime) {
         return -1;
     }
 
-    runtime->sdk_active = true;
     MYBOT_LOGI(TAG, "mybot SDK started");
     return 0;
 }
 
-static void stop_sdk(app_runtime_t *runtime) {
-    if (!runtime->sdk_active) {
+static void stop_sdk(void) {
+    if (!mybot_is_running() && mybot_get_state() == MYBOT_STATE_STOPPED) {
         return;
     }
     MYBOT_LOGI(TAG, "stopping mybot SDK");
     mybot_stop();
-    runtime->sdk_active = false;
 }
 
 /* Forward semantic key actions to the SDK key adapter.  The dispatcher has no
  * subscriber while the SDK is stopped, so ignore presses like the BK7259 key
  * callback does. */
-static void forward_button_event(const app_runtime_t *runtime, mybot_event_type_t type) {
+static void forward_button_event(mybot_event_type_t type) {
     mybot_key_action_t action;
     mybot_state_t state;
 
-    if (!runtime->sdk_active) {
+    if (!mybot_is_running()) {
         return;
     }
 
@@ -331,14 +272,11 @@ static void forward_button_event(const app_runtime_t *runtime, mybot_event_type_
 
 static void handle_button_event(app_runtime_t *runtime, const mybot_event_t *event) {
     if (event->type == MYBOT_EVENT_BUTTON_PROVISIONING_REQUEST) {
-        if (runtime->provisioning_active) {
-            return;
-        }
         MYBOT_LOGI(TAG, "provisioning requested");
         runtime->provision_requested = true;
         return;
     }
-    forward_button_event(runtime, event->type);
+    forward_button_event(event->type);
 }
 
 static void controller_wait_for_button(app_runtime_t *runtime) {
@@ -350,33 +288,55 @@ static void controller_wait_for_button(app_runtime_t *runtime) {
 
 /* Wait for the STA worker to report a usable IPv4 connection.  A provisioning
  * request interrupts the wait; the caller restarts the top of the loop. */
-static int wait_for_network(app_runtime_t *runtime) {
+static int ensure_network(app_runtime_t *runtime) {
+    bool configured = false;
+
+    if (runtime->provision_requested) {
+        return 1;
+    }
+    if (mybot_network_is_configured(&configured) < 0) {
+        MYBOT_LOGE(TAG, "failed to inspect saved Wi-Fi credentials");
+        return -1;
+    }
+
+    MYBOT_LOGI(TAG, "Wi-Fi provisioning state: %s", configured ? "configured" : "new device");
+    if (!configured) {
+        return 1;
+    }
+
+    MYBOT_LOGI(TAG, "starting normal STA networking");
+    publish_connectivity(MYBOT_CONNECTIVITY_DISCONNECTED);
+    if (mybot_network_start() < 0) {
+        MYBOT_LOGE(TAG, "normal STA networking start failed");
+        return -1;
+    }
+    show_display_screen(runtime, MYBOT_DISPLAY_SCREEN_WIFI_DISCONNECTED);
+
     while (!mybot_network_is_connected()) {
         if (runtime->provision_requested) {
-            return 0;
+            if (stop_network() < 0) {
+                return -1;
+            }
+            return 1;
         }
         controller_wait_for_button(runtime);
     }
-    update_network_state(runtime);
+    publish_connectivity(MYBOT_CONNECTIVITY_CONNECTED);
+    show_display_screen(runtime, MYBOT_DISPLAY_SCREEN_STARTING_SERVICES);
     return 0;
 }
 
-/* Wait for the APSTA worker's authoritative result, keeping buttons live. */
-static int wait_for_provisioning(app_runtime_t *runtime) {
-    for (;;) {
-        mybot_provisioning_state_t state = mybot_provisioning_get_state();
-
-        if (state == MYBOT_PROVISIONING_STATE_COMPLETED) {
-            MYBOT_LOGI(TAG, "APSTA provisioning completed");
-            stop_provisioning(runtime);
-            return 0;
-        }
-        if (state == MYBOT_PROVISIONING_STATE_FAILED) {
-            MYBOT_LOGE(TAG, "APSTA provisioning failed");
-            stop_provisioning(runtime);
-            return -1;
-        }
-        controller_wait_for_button(runtime);
+static void publish_network_transition(app_runtime_t *runtime, bool *connected) {
+    bool current = mybot_network_is_connected();
+    if (current == *connected) {
+        return;
+    }
+    *connected = current;
+    publish_connectivity(current ? MYBOT_CONNECTIVITY_CONNECTED
+                                 : MYBOT_CONNECTIVITY_DISCONNECTED);
+    MYBOT_LOGI(TAG, "network %s", current ? "connected" : "disconnected");
+    if (current) {
+        show_display_screen(runtime, MYBOT_DISPLAY_SCREEN_STARTING_SERVICES);
     }
 }
 
@@ -384,53 +344,35 @@ static int wait_for_provisioning(app_runtime_t *runtime) {
  * only state machine owner; this loop orchestrates network/provisioning and
  * SDK sessions and exits when the SDK fails or stops unexpectedly. */
 static int controller_run(app_runtime_t *runtime) {
-    bool configured = false;
     mybot_state_t last_state = MYBOT_STATE_STOPPED;
     bool state_valid = false;
 
-    if (mybot_network_is_configured(&configured) < 0) {
-        MYBOT_LOGE(TAG, "failed to inspect saved Wi-Fi credentials");
-        return -1;
-    }
-    MYBOT_LOGI(TAG, "Wi-Fi provisioning state: %s", configured ? "configured" : "new device");
-    runtime->provision_requested = !configured;
-
     for (;;) {
-        if (runtime->provision_requested) {
-            runtime->provision_requested = false;
-            stop_sdk(runtime);
-            stop_network(runtime);
-            if (start_provisioning(runtime) < 0 || wait_for_provisioning(runtime) < 0) {
-                return -1;
-            }
-            runtime->network_success_prompt_pending = true;
-            /* Save credentials are now present: restart the top of the loop
-             * so the STA worker is started before waiting for connectivity. */
-            continue;
-        } else if (!runtime->network_started) {
-            if (start_network(runtime) < 0) {
-                return -1;
-            }
-        }
-
-        if (wait_for_network(runtime) < 0) {
+        int network_result = ensure_network(runtime);
+        if (network_result < 0) {
             return -1;
         }
-        if (runtime->provision_requested) {
+        if (network_result > 0) {
+            stop_sdk();
+            if (stop_network() < 0) {
+                return -1;
+            }
+            if (provision_network(runtime) < 0) {
+                return -1;
+            }
             continue;
         }
 
-        if (!runtime->sdk_active) {
-            if (start_sdk(runtime) < 0) {
-                return -1;
-            }
-            log_state_transition(&last_state, &state_valid);
+        if (start_sdk(runtime) < 0) {
+            return -1;
         }
+        log_state_transition(&last_state, &state_valid);
 
+        bool connected = true;
         bool sdk_failed = false;
-        while (runtime->sdk_active && mybot_is_running()) {
+        while (mybot_is_running()) {
             controller_wait_for_button(runtime);
-            update_network_state(runtime);
+            publish_network_transition(runtime, &connected);
             log_state_transition(&last_state, &state_valid);
             if (mybot_get_state() == MYBOT_STATE_FAILED) {
                 MYBOT_LOGE(TAG, "SDK entered the failed state");
@@ -442,26 +384,25 @@ static int controller_run(app_runtime_t *runtime) {
             }
         }
         log_state_transition(&last_state, &state_valid);
-
-        if (runtime->provision_requested) {
-            continue;
-        }
+        sdk_failed = sdk_failed || mybot_get_state() == MYBOT_STATE_FAILED;
 
         MYBOT_LOGW(TAG, "SDK stopped, state=%d", (int)mybot_get_state());
-        stop_sdk(runtime);
+        stop_sdk();
+        if (runtime->provision_requested) {
+            if (stop_network() < 0 || provision_network(runtime) < 0) {
+                return -1;
+            }
+            continue;
+        }
         return sdk_failed ? -1 : 0;
     }
 }
 
 static void controller_cleanup(app_runtime_t *runtime) {
     mybot_prompt_player_bk725x_stop();
-    /* Keep the shared pipeline alive while the SDK tears down its playback
-     * ops, then release the audio power vote. */
-    mybot_audio_bk725x_shared_playback_start();
-    stop_sdk(runtime);
-    mybot_audio_bk725x_shared_playback_stop();
-    stop_network(runtime);
-    stop_provisioning(runtime);
+    stop_sdk();
+    stop_network();
+    (void)mybot_provisioning_stop();
     if (runtime->button_initialized) {
         mybot_button_deinit();
         runtime->button_initialized = false;
@@ -528,6 +469,10 @@ static void controller_thread(void *arg) {
         goto cleanup;
     }
     runtime.button_initialized = true;
+    if (bk725x_platform_adapters_register() < 0) {
+        MYBOT_LOGE(TAG, "platform adapter registration failed");
+        goto cleanup;
+    }
 
     MYBOT_LOGI(TAG, "application controller ready");
     result = controller_run(&runtime);

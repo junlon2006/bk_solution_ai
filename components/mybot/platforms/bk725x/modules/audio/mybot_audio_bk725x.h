@@ -12,7 +12,6 @@ extern "C" {
 
 #include "mybot_audio_capture_bk725x.h"
 #include "mybot_audio_playback_bk725x.h"
-#include "mybot_audio_shared_bk725x.h"
 #include "mybot_audio_volume_bk725x.h"
 #include "mybot_audio_power_bk725x.h"
 

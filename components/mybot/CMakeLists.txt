@@ -61,7 +61,6 @@ set(announce_module_srcs
 set(audio_module_srcs
     platforms/bk725x/modules/audio/mybot_audio_capture_bk725x.c
     platforms/bk725x/modules/audio/mybot_audio_playback_bk725x.c
-    platforms/bk725x/modules/audio/mybot_audio_shared_bk725x.c
     platforms/bk725x/modules/audio/mybot_audio_power_bk725x.c
     platforms/bk725x/modules/audio/mybot_audio_volume_bk725x.c
     platforms/bk725x/modules/audio/mybot_ogg_pcm_bk725x.c

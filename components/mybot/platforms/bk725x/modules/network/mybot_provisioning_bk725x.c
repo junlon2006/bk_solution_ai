@@ -4,8 +4,6 @@
 #include "mybot_wifi_credentials.h"
 #include "mybot_wifi_runtime.h"
 
-#include <mybot_event.h>
-
 #include <common/bk_err.h>
 #include "mybot_platform_log.h"
 #include <components/netif.h>
