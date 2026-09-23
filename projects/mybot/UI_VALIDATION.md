@@ -8,7 +8,9 @@ SSID 由配网模块复制投递。SDK 的 `include/src` 快照已单独同步�
 旧直接渲染字体及其独立许可证已删除，可从 Git 历史恢复；新资源许可见
 `components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md`。
 
-## 基线与契约
+## UI 移植时的基线与契约
+
+本节保留当时的验证版本。后续 SDK 更新以 `components/mybot/mybot_sdk/SDK_REVISION` 为准。
 
 - AVDK：`239c151bf4ba239bf8ebc1a178df0a8b659b55bd`，工作树保持干净，使用其中的 LVGL 9.5.0。
 - Solution：`9cbfb976acdf043b01dde91daf1889a54e66d122`，改动留在工作树，未提交或更新根 gitlink。
@@ -22,6 +24,29 @@ SSID 由配网模块复制投递。SDK 的 `include/src` 快照已单独同步�
 - 已核对锁定 SDK 的完整 `docs/PORTING.zh-CN.md`、`docs/EMBEDDED.zh-CN.md` 和
   `include/mybot/platform/mybot_lcd.h`，以及 BK 的显示、DPU、帧分配和 RTOS 接口。
   SDK 输入只按平台头文件消费；SDK 销毁只解挂，产品显示持续到平台关闭。
+
+## 2026-09-23 SDK 同步复核
+
+- 通过远端 `main` 确认最新提交为 `83fbcb0969da4c73a5912326d699f90ec634b28e`，版本号仍为 1.2.0。
+  全量同步 56 个 `include/src` 文件；唯一目标补丁仍为原有 HTTPS body 日志，补丁内容不变。
+  新聚合 SHA256：`3f89476f880518b0f0d68e45d709023a0cb0d6146865d8e32b8a95ceb4e46b24`。
+- 此次修改基于 Solution `d717cef1879695cafdc83c436c7abeda692e4196`，未自动提交。
+  AVDK、AOSL 和 RTSA 仍使用本记录中的固定版本；AOSL 内容与 RTSA 头文件/静态库摘要复核一致。
+  BK7259 平台、圆角 UI 和 UID 设备 ID 源码未改变，无新增 GCC 原子接口依赖。
+- 核对最新 `PORTING.zh-CN.md`、`EMBEDDED.zh-CN.md` 和应用生命周期、音频、视频、Wi-Fi、
+  LCD、提示音公开头文件。视频控制改由 SDK 控制线程串行执行，提示音资源保留到 RTC 回调
+  排空后销毁；现有平台 ops 和目标 CMake 源文件列表无需调整。
+- 在隔离宿主目录以 `MYBOT_ENABLE_VIDEO=ON` 构建并运行现有 `ctest`，21/21 通过。
+  测试提交 `655bf9c5aa53ea90561b0ad61af0ddd97a1d9c32` 与最终远端合并提交的完整 Git tree
+  均为 `7173ad69ca9348319a8131a57053bd9bdb2381f9`。覆盖视频启停/回调、提示音 stop/destroy、
+  RTM 三状态/声纹以及设备生命周期和 JSON；这些宿主测试使用上游源，不包含目标 HTTPS 日志补丁。
+- 原工程执行下述 clean/build 命令，带目标补丁的 AP/CP 完整编译与合包通过。
+  AP Flash 1,926,024 字节（41.00%），AP 静态 RAM 152,900 字节（38.88%）；
+  CP Flash 1,296,900 字节（89.95%）。ELF 为 ARM32 小端 hard-float，无未解析符号。
+  `all-app.bin` 为 3,433,376 字节，`app_pack.rbl` 为 2,027,888 字节。
+- 逐文件验证确认除声明补丁外与上游完全一致，`git diff --check` 通过。
+  旧边界检查器仍因固定旧版本和“不使用 LVGL”的旧规则失败，未将其记作通过。
+  Kconfig 和链接器既有警告仍存在。此次未重新执行 UI 宿主截图测试或实板音视频验证。
 
 ## 构建
 
