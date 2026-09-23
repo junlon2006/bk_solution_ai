@@ -18,6 +18,16 @@ constexpr uint32_t kTimerPeriodMs = 100;
 constexpr uint32_t kNotificationMs = 2000;
 constexpr size_t kSsidCapacity = 33;
 
+/* Logical pixels on the Robot V2 panel. Keep text inside the rounded bezel;
+ * the middle of the screen can use more width than the top and bottom. */
+constexpr int kHeaderInsetX = 40;
+constexpr int kHeaderInsetY = 14;
+constexpr int kHeaderHeight = 30;
+constexpr int kCardInsetX = 16;
+constexpr int kFooterInsetX = 32;
+constexpr int kFooterInsetY = 18;
+constexpr int kFooterHeight = 34;
+
 struct Theme {
     uint32_t background;
     uint32_t surface;
@@ -133,13 +143,10 @@ struct View {
     uint32_t notice_color;
     Activity activity_mode;
     unsigned animation_frame;
-    int width;
-    int height;
     int content_y;
 };
 
 View s_view{};
-int view_width();
 
 lv_obj_t *make_panel(lv_obj_t *parent, int x, int y, int width, int height, uint32_t color) {
     lv_obj_t *panel = lv_obj_create(parent);
@@ -321,9 +328,6 @@ void update_notifications(const mybot_lcd_content_t &content) {
     }
 }
 
-int view_width() {
-    return s_view.width;
-}
 } // namespace
 
 int mybot_lvgl_view_create(lv_display_t *display) {
@@ -335,13 +339,12 @@ int mybot_lvgl_view_create(lv_display_t *display) {
     if (width < 240 || height < 240) {
         return -1;
     }
-    s_view.width = width;
-    s_view.height = height;
-    const int margin = 12;
-    const int card_width = width - margin * 2;
-    const int card_x = margin;
-    const int card_y = 46;
-    const int footer_y = height - 44;
+    const int header_width = width - kHeaderInsetX * 2;
+    const int card_width = width - kCardInsetX * 2;
+    const int card_x = kCardInsetX;
+    const int card_y = kHeaderInsetY + kHeaderHeight + 10;
+    const int footer_width = width - kFooterInsetX * 2;
+    const int footer_y = height - kFooterInsetY - kFooterHeight;
     const int card_height = footer_y - card_y - 12;
     const int center_x = (card_width - 64) / 2;
     s_view.content_y = card_height > 138 ? (card_height - 138) / 2 : 0;
@@ -351,8 +354,10 @@ int mybot_lvgl_view_create(lv_display_t *display) {
         mybot_lvgl_view_destroy();
         return -1;
     }
-    lv_obj_t *header = make_panel(s_view.root, 0, 0, width, 38, kTheme.background);
-    lv_obj_t *footer = make_panel(s_view.root, margin, footer_y, card_width, 34, kTheme.surface);
+    lv_obj_t *header = make_panel(s_view.root, kHeaderInsetX, kHeaderInsetY,
+                                 header_width, kHeaderHeight, kTheme.background);
+    lv_obj_t *footer = make_panel(s_view.root, kFooterInsetX, footer_y,
+                                 footer_width, kFooterHeight, kTheme.surface);
     s_view.card = make_panel(s_view.root, card_x, card_y, card_width, card_height, kTheme.surface);
     if (!header || !footer || !s_view.card) {
         mybot_lvgl_view_destroy();
@@ -372,15 +377,15 @@ int mybot_lvgl_view_create(lv_display_t *display) {
     lv_obj_set_style_border_width(s_view.badge, 2, 0);
     lv_obj_set_style_bg_opa(s_view.activity, LV_OPA_TRANSP, 0);
 
-    const int brand_width = width / 3;
-    s_view.brand = make_label(header, 8, 4, brand_width, 30);
-    s_view.status = make_label(header, brand_width, 4, width - brand_width - 8, 30);
-    s_view.notification = make_label(header, 4, 4, width - 8, 30);
+    const int brand_width = header_width / 3;
+    s_view.brand = make_label(header, 0, 0, brand_width, kHeaderHeight);
+    s_view.status = make_label(header, brand_width, 0, header_width - brand_width, kHeaderHeight);
+    s_view.notification = make_label(header, 0, 0, header_width, kHeaderHeight);
     s_view.icon = make_label(s_view.badge, 0, 0, 60, 40);
     s_view.emoji = lv_image_create(s_view.card);
     s_view.title = make_label(s_view.card, 4, s_view.content_y + 81, card_width - 8, 30);
     s_view.code = make_label(s_view.card, 2, s_view.content_y + 63, card_width - 4, 45);
-    s_view.notice = make_label(footer, 2, 3, card_width - 4, 28);
+    s_view.notice = make_label(footer, 4, 3, footer_width - 8, 28);
     if (!s_view.brand || !s_view.status || !s_view.notification || !s_view.icon || !s_view.emoji ||
         !s_view.title || !s_view.code || !s_view.notice) {
         mybot_lvgl_view_destroy();
@@ -529,7 +534,7 @@ void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *ssid
         lv_point_t extent{};
         lv_text_get_size(&extent, normalized.pair_code, &lv_font_montserrat_32, 0, 0, LV_COORD_MAX,
                          LV_TEXT_FLAG_NONE);
-        const int available = view_width() - 28;
+        const int available = lv_obj_get_width(s_view.code);
         const lv_font_t *font = &lv_font_montserrat_32;
         if (extent.x > available) {
             font = &mybot_lvgl_font_20;

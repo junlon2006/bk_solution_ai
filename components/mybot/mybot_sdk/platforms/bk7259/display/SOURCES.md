@@ -27,5 +27,9 @@ hint is `开始对话`; the English hint is `Press to start`, matching button co
 
 BK7259 changes remove ESP-IDF and Wi-Fi controller dependencies, receive a copied
 SSID from the display owner, keep dynamic label strings in fixed view storage,
-and expand the card to the 385x320 logical screen. All view/timer operations run
+and expand the card to the 385x320 logical screen. The rounded Robot V2 bezel is
+accounted for with header insets of 40 pixels horizontally and 14 vertically,
+footer insets of 32 pixels horizontally and 18 from the bottom, and a 16-pixel
+horizontal card margin. Text widths and pairing-code font selection follow the
+actual label width inside these margins. All view/timer operations run
 on the same display owner task. The view never owns the panel or framebuffer.
