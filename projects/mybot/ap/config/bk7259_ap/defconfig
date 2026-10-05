@@ -128,3 +128,4 @@ CONFIG_AGORA_IOT_SDK=n
 # The service endpoint is derived from the MyBot language choice. The device id
 # is derived at runtime from the per-chip UID in ap_main.c.
 CONFIG_MYBOT_LANGUAGE_ZH_CN=y
+# CONFIG_MYBOT_LANGUAGE_EN_US is not set
