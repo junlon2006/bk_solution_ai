@@ -20,8 +20,9 @@ revision, format and generation details are retained in
 `assets/ui/noto_emoji/SOURCES.json`.
 
 The four constant 64x64 ARGB8888 emoji images total 65,536 pixel bytes. The
-20-pixel MyBot UI Sans font contains 161 glyphs, including ASCII and the fixed
-Chinese UI vocabulary. Neither bitmap set is modified in this port. Arbitrary
+20-pixel MyBot UI Sans font contains 165 glyphs, including ASCII and the fixed
+Chinese UI vocabulary. It includes the four glyphs needed by the web-console
+pairing prompt: `页`, `控`, `制`, and `台`. Arbitrary
 Chinese SSIDs or chat text require a separately extended font. The Chinese ready
 hint is `开始对话`; the English hint is `Press to start`, matching button control.
 
