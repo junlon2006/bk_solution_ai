@@ -3,7 +3,7 @@
 /* Status/content/notification layout adapted from the MIT-licensed display
  * reference identified in assets/licenses/LVGL_VIEW_LICENSE.txt.
  * BK7259 adaptation: product-owned display task, copied SSID input and
- * proportional card layout for the 385x320 logical JD9855 display. */
+ * proportional card layout for the 640x480 logical Robot R2 display. */
 #include "lvgl_view.h"
 #include "lvgl_assets.h"
 

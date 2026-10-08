@@ -10,7 +10,7 @@
 #include <components/bk_frame_buffer.h>
 #include <driver/gpio.h>
 #include <gpio_driver.h>
-#include <lcd/lcd_mipi_jd9855_320x385.h>
+#include <lcd/lcd_mipi_gc9503cv_480x640.h>
 #include <modules/pm.h>
 #include <os/mem.h>
 #include <os/os.h>
@@ -23,8 +23,8 @@
 #include <string.h>
 
 #define TAG "mybot_lcd"
-#define LCD_NATIVE_WIDTH 320
-#define LCD_NATIVE_HEIGHT 385
+#define LCD_NATIVE_WIDTH 480
+#define LCD_NATIVE_HEIGHT 640
 #define LCD_LOGICAL_WIDTH LCD_NATIVE_HEIGHT
 #define LCD_LOGICAL_HEIGHT LCD_NATIVE_WIDTH
 #define LCD_FRAME_BYTES (LCD_NATIVE_WIDTH * LCD_NATIVE_HEIGHT * 2U)
@@ -37,9 +37,10 @@
 /* Beken priorities run in reverse order: keep UI below the audio workers. */
 #define LCD_UI_PRIORITY BEKEN_APPLICATION_PRIORITY
 #define LCD_SSID_CAPACITY 33
-#define LCD_POWER_GPIO GPIO_53
-#define LCD_RESET_GPIO GPIO_5
-#define LCD_BACKLIGHT_GPIO GPIO_7
+#define LCD_POWER_GPIO GPIO_20
+#define LCD_POWER_2V8_GPIO GPIO_29
+#define LCD_RESET_GPIO GPIO_42
+#define LCD_BACKLIGHT_GPIO GPIO_40
 
 /* lcd_flush consumes tightly packed RGB565 rows from the partial draw buffer. */
 _Static_assert(LV_DRAW_BUF_STRIDE_ALIGN == 1, "LCD partial flush requires packed rows");
@@ -66,6 +67,7 @@ typedef struct {
     bool flush_fault;
     bool vddio_owned;
     bool power_gpio_owned;
+    bool power_2v8_gpio_owned;
     bool backlight_gpio_owned;
     bool cpu_vote_owned;
     bool controller_inited;
@@ -312,7 +314,9 @@ static int set_backlight(bool enabled)
 static int panel_power_on(void)
 {
     if (gpio_dev_unmap(LCD_BACKLIGHT_GPIO) != BK_OK ||
-        gpio_dev_unmap(LCD_POWER_GPIO) != BK_OK || gpio_dev_unmap(LCD_RESET_GPIO) != BK_OK ||
+        gpio_dev_unmap(LCD_POWER_GPIO) != BK_OK ||
+        gpio_dev_unmap(LCD_POWER_2V8_GPIO) != BK_OK ||
+        gpio_dev_unmap(LCD_RESET_GPIO) != BK_OK ||
         bk_gpio_enable_output(LCD_RESET_GPIO) != BK_OK ||
         bk_gpio_set_output_low(LCD_RESET_GPIO) != BK_OK ||
         bk_gpio_enable_output(LCD_BACKLIGHT_GPIO) != BK_OK ||
@@ -325,7 +329,10 @@ static int panel_power_on(void)
     if (bk_gpio_set_output_high(LCD_BACKLIGHT_GPIO) != BK_OK ||
         bk_gpio_enable_output(LCD_POWER_GPIO) != BK_OK ||
         bk_gpio_pull_up(LCD_POWER_GPIO) != BK_OK ||
-        bk_gpio_set_output_high(LCD_POWER_GPIO) != BK_OK) {
+        bk_gpio_set_output_high(LCD_POWER_GPIO) != BK_OK ||
+        bk_gpio_enable_output(LCD_POWER_2V8_GPIO) != BK_OK ||
+        bk_gpio_pull_down(LCD_POWER_2V8_GPIO) != BK_OK ||
+        bk_gpio_set_output_high(LCD_POWER_2V8_GPIO) != BK_OK) {
         return -1;
     }
     s_lcd.backlight_gpio_owned = true;
@@ -333,6 +340,7 @@ static int panel_power_on(void)
         return -1;
     }
     s_lcd.power_gpio_owned = true;
+    s_lcd.power_2v8_gpio_owned = true;
 
     pm_auxldo_ctrl_cfg_t vddio = {
         .ldo = AUXLDOS_SEL_1P8V,
@@ -386,6 +394,14 @@ static int panel_power_off(void)
             s_lcd.power_gpio_owned = false;
         }
     }
+    if (s_lcd.power_2v8_gpio_owned) {
+        if (bk_gpio_set_output_low(LCD_POWER_2V8_GPIO) != BK_OK) {
+            MYBOT_LOGW(TAG, "failed to disable panel 2.8V");
+            result = -1;
+        } else {
+            s_lcd.power_2v8_gpio_owned = false;
+        }
+    }
     return result;
 }
 
@@ -394,7 +410,8 @@ static bool resources_owned(void)
     return s_lcd.worker || s_lcd.display || s_lcd.draw_buffer ||
            s_lcd.controller || s_lcd.panel || s_lcd.bus || s_lcd.frames[0] ||
            s_lcd.frames[1] ||
-           s_lcd.vddio_owned || s_lcd.power_gpio_owned || s_lcd.backlight_gpio_owned ||
+           s_lcd.vddio_owned || s_lcd.power_gpio_owned || s_lcd.power_2v8_gpio_owned ||
+           s_lcd.backlight_gpio_owned ||
            s_lcd.cpu_vote_owned;
 }
 
@@ -560,7 +577,7 @@ int bk7259_lcd_prepare(void)
         goto failed;
     }
     const bk_lcd_panel_config_t panel_config = {.reset_pin = LCD_RESET_GPIO};
-    if (bk_lcd_mipi_panel_new(s_lcd.bus, &panel_config, &lcd_device_jd9855_mipi_320x385,
+    if (bk_lcd_mipi_panel_new(s_lcd.bus, &panel_config, &lcd_device_gc9503cv_mipi_480x640,
                             &s_lcd.panel) != BK_OK ||
         bk_display_dpu_ctlr_new(&s_lcd.controller, s_lcd.panel, &s_controller_config) != AVDK_ERR_OK ||
         bk_display_init(s_lcd.controller) != AVDK_ERR_OK) {

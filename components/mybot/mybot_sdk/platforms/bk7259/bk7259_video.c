@@ -61,13 +61,13 @@
 #define VIDEO_TASK_PRIORITY BEKEN_DEFAULT_WORKER_PRIORITY
 #define VIDEO_TASK_STACK_SIZE (8U * 1024U)
 
-/* Robot V2 BK7259 MIPI CSI (GC2053) wiring, shared with beken_robot. */
-#define VIDEO_CAM_SCL GPIO_70
-#define VIDEO_CAM_SDA GPIO_71
-#define VIDEO_CAM_RESET GPIO_31
+/* Robot R2 BK7259 MIPI CSI (GC2053) wiring. */
+#define VIDEO_CAM_SCL GPIO_64
+#define VIDEO_CAM_SDA GPIO_65
+#define VIDEO_CAM_RESET GPIO_30
 #define VIDEO_CAM_XCLK GPIO_59
-#define VIDEO_CAM_I2C_ID 1
-#define VIDEO_CAM_POWER GPIO_32
+#define VIDEO_CAM_I2C_ID 0
+#define VIDEO_CAM_POWER GPIO_29
 
 typedef struct {
     beken_mutex_t lock;
