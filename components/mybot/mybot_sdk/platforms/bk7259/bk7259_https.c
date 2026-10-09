@@ -324,6 +324,11 @@ static int https_connect(void **out_connection, const char *host, uint16_t port,
     }
     ret = mbedtls_x509_crt_parse(&connection->ca_chain, MYBOT_BK7259_TLS_ROOTS_PEM,
                                  sizeof(MYBOT_BK7259_TLS_ROOTS_PEM));
+    if (ret == 0) {
+        ret = mbedtls_x509_crt_parse(&connection->ca_chain,
+                                     MYBOT_BK7259_DIGICERT_GLOBAL_ROOT_G2_PEM,
+                                     sizeof(MYBOT_BK7259_DIGICERT_GLOBAL_ROOT_G2_PEM));
+    }
     if (ret != 0) {
         log_tls_error("CA parse", ret);
         goto fail;

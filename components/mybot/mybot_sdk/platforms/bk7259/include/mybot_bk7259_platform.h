@@ -13,7 +13,7 @@
 #else
 #define MYBOT_LANGUAGE_TAG "zh-CN"
 /* The /api prefix is part of the device service route. */
-#define MYBOT_SERVER_BASE "https://mybot.sh2.agoralab.co/api"
+#define MYBOT_SERVER_BASE "https://botstation.shengwang.cn/api"
 #endif
 
 #define MYBOT_ASSETS_DIR "mybot/assets"
