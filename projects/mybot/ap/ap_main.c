@@ -165,105 +165,42 @@ static int mybot_run(void)
     }
 
     int result = -1;
-    for (;;) {
-        mybot_log_state_transition(&last_state, &state_valid);
-        /* The SDK is not running here, so the erase is safe to perform. */
-        if (mybot_bk7259_wait_reset_request(0)) {
-            BK_LOGW(TAG, "factory reset requested while the SDK is stopped\r\n");
-            mybot_bk7259_factory_reset();
-        }
-        int network_result = mybot_bk7259_ensure_network(s_config.device_id);
-        mybot_log_state_transition(&last_state, &state_valid);
-        if (network_result < 0) {
-            BK_LOGE(TAG, "network setup failed\r\n");
-            break;
-        }
-        if (network_result > 0) {
-            (void)mybot_bk7259_wait_provision_request(0);
-        } else if (mybot_bk7259_wait_provision_request(0)) {
-            if (mybot_bk7259_provision_wifi(s_config.device_id) < 0) {
-                BK_LOGE(TAG, "APSTA provisioning failed\r\n");
-                break;
-            }
-            (void)mybot_bk7259_wait_provision_request(0);
-            continue;
-        }
-
+    mybot_log_state_transition(&last_state, &state_valid);
+    int network_result = mybot_bk7259_ensure_network(s_config.device_id);
+    mybot_log_state_transition(&last_state, &state_valid);
+    if (network_result < 0) {
+        BK_LOGE(TAG, "network setup failed\r\n");
+    } else {
         BK_LOGI(TAG, "starting SDK\r\n");
         if (mybot_start(&s_config) < 0) {
             mybot_log_state_transition(&last_state, &state_valid);
             BK_LOGE(TAG, "SDK startup failed\r\n");
             mybot_stop();
             mybot_log_state_transition(&last_state, &state_valid);
-            break;
-        }
-        BK_LOGI(TAG, "SDK started\r\n");
-        mybot_log_state_transition(&last_state, &state_valid);
-
-        bool provision_requested = false;
-        bool reset_requested = false;
-        bool sdk_failed = false;
-        while (mybot_is_running()) {
+        } else {
+            BK_LOGI(TAG, "SDK started\r\n");
             mybot_log_state_transition(&last_state, &state_valid);
-            if (mybot_bk7259_wait_reset_request(MYBOT_POLL_INTERVAL_MS)) {
-                reset_requested = true;
-                break;
+            while (mybot_is_running()) {
+                mybot_log_state_transition(&last_state, &state_valid);
+                if (mybot_get_state() == MYBOT_STATE_FAILED) {
+                    BK_LOGE(TAG, "SDK entered the failed state\r\n");
+                    break;
+                }
+                (void)rtos_delay_milliseconds(MYBOT_POLL_INTERVAL_MS);
             }
-            if (mybot_bk7259_wait_provision_request(MYBOT_POLL_INTERVAL_MS)) {
-                provision_requested = true;
-                break;
+
+            BK_LOGI(TAG, "stopping SDK, reason=sdk_exit\r\n");
+            mybot_state_t stop_state = mybot_get_state();
+            BK_LOGI(TAG, "SDK stop requested from state=%s(%d)\r\n",
+                    mybot_state_name(stop_state), (int)stop_state);
+            mybot_stop();
+            mybot_log_state_transition(&last_state, &state_valid);
+            if (mybot_is_running() || mybot_get_state() != MYBOT_STATE_STOPPED) {
+                BK_LOGE(TAG, "SDK shutdown did not reach STOPPED\r\n");
+            } else {
+                result = stop_state == MYBOT_STATE_FAILED ? -1 : 0;
             }
-            if (mybot_get_state() == MYBOT_STATE_FAILED) {
-                BK_LOGE(TAG, "SDK entered the failed state\r\n");
-                sdk_failed = true;
-                break;
-            }
         }
-        mybot_log_state_transition(&last_state, &state_valid);
-
-        if (!provision_requested && !reset_requested) {
-            provision_requested = mybot_bk7259_wait_provision_request(0);
-            reset_requested = mybot_bk7259_wait_reset_request(0);
-            sdk_failed = sdk_failed || mybot_get_state() == MYBOT_STATE_FAILED;
-        }
-
-        BK_LOGI(TAG, "stopping SDK, reason=%s\r\n",
-                reset_requested ? "reset"
-                                : (provision_requested ? "provision" : "sdk_exit"));
-        mybot_state_t stop_state = mybot_get_state();
-        BK_LOGI(TAG, "SDK stop requested from state=%s(%d)\r\n",
-                mybot_state_name(stop_state), (int)stop_state);
-        mybot_stop();
-        mybot_log_state_transition(&last_state, &state_valid);
-        if (!provision_requested) {
-            provision_requested = mybot_bk7259_wait_provision_request(0);
-        }
-        if (!reset_requested) {
-            reset_requested = mybot_bk7259_wait_reset_request(0);
-        }
-
-        /* The SDK has released its resources, so the erase takes precedence over
-         * the STOPPED check and over provisioning; it never returns. */
-        if (reset_requested) {
-            BK_LOGW(TAG, "performing factory reset\r\n");
-            mybot_bk7259_factory_reset();
-        }
-
-        if (mybot_is_running() || mybot_get_state() != MYBOT_STATE_STOPPED) {
-            BK_LOGE(TAG, "SDK shutdown did not reach STOPPED\r\n");
-            break;
-        }
-        if (!provision_requested) {
-            result = sdk_failed ? -1 : 0;
-            break;
-        }
-
-        BK_LOGI(TAG, "starting APSTA provisioning\r\n");
-        if (mybot_bk7259_provision_wifi(s_config.device_id) < 0) {
-            BK_LOGE(TAG, "APSTA provisioning failed\r\n");
-            break;
-        }
-        (void)mybot_bk7259_wait_provision_request(0);
     }
 
     mybot_stop();

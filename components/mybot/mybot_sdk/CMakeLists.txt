@@ -116,7 +116,6 @@ set(mybot_priv_requires
     bk_peripheral
     bk_pm
     easy_flash
-    adc_key
     bk_event
     bk_wifi
     bk_netif

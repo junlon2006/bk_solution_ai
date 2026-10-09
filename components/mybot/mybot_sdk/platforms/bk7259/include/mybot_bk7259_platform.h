@@ -27,13 +27,6 @@ int mybot_bk7259_platform_register(void);
 /* Returns 1 when APSTA was required, 0 for an existing connection, or -1. */
 int mybot_bk7259_ensure_network(const char *device_id);
 int mybot_bk7259_provision_wifi(const char *device_id);
-bool mybot_bk7259_wait_provision_request(uint32_t timeout_ms);
-/* Returns true once when the factory-reset key was held long enough. Only
- * consume it while the SDK is stopped; the erase needs the SDK's EasyFlash and
- * Wi-Fi users gone. */
-bool mybot_bk7259_wait_reset_request(uint32_t timeout_ms);
-/* Erases every persisted MyBot record and reboots. Does not return. */
-void mybot_bk7259_factory_reset(void);
 void mybot_bk7259_platform_shutdown(void);
 
 #ifdef __cplusplus

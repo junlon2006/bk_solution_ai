@@ -18,34 +18,14 @@ CONFIG_CJSON_USE=y
 # CONFIG_WIFI_CLI_ENABLE is not set
 # CONFIG_WIFI_CLI_DEBUG is not set
 
-# MyBot keeps the shared ADC key scan alive across SDK start/stop cycles.
-CONFIG_BUTTON=y
-CONFIG_ADC_KEY=y
-# Hold time before a key reports a long press. The conversation key uses it to
-# request reprovisioning, so this is the "about two seconds" in the README.
-CONFIG_ADC_KEY_LONG_PRESS_MS=2000
+# The product uses the MyBot-owned direct GPIO key adapter; no generic key service.
+# CONFIG_BUTTON is not set
+# CONFIG_ADC_KEY is not set
 
-# Robot V2 keys are two resistor ladders: GPIO13/ADC15 carries S2 and S3,
-# GPIO28/ADC4 carries S4 and S5. A button is the pair (channel, voltage
-# window), so the two windows on one channel must not overlap. S2/S3 and S4/S5
-# share the same resistor values, hence the same two windows.
-CONFIG_MYBOT_KEY_ADC_CH1_CHAN=15
-CONFIG_MYBOT_KEY_ADC_CH2_CHAN=4
-CONFIG_MYBOT_KEY_S2_MV_LOW=500
-CONFIG_MYBOT_KEY_S2_MV_HIGH=1500
-CONFIG_MYBOT_KEY_S3_MV_LOW=4500
-CONFIG_MYBOT_KEY_S3_MV_HIGH=6000
-CONFIG_MYBOT_KEY_S4_MV_LOW=500
-CONFIG_MYBOT_KEY_S4_MV_HIGH=1500
-CONFIG_MYBOT_KEY_S5_MV_LOW=4500
-CONFIG_MYBOT_KEY_S5_MV_HIGH=6000
-# S2 conversation/provisioning, S3 factory reset, S4 volume down, S5 volume up.
-# S2 and S3 both take a long press; S3's erase is long-press-only so a stray
-# touch cannot wipe the device. See usr_gpio_cfg.h for the power-on pad state.
-CONFIG_MYBOT_KEY_S2_CONVERSATION=y
-CONFIG_MYBOT_KEY_S3_FACTORY_RESET=y
-CONFIG_MYBOT_KEY_S4_VOLUME_DOWN=y
-CONFIG_MYBOT_KEY_S5_VOLUME_UP=y
+# The Yunqu V1.0 board has one firmware-visible conversation key on GPIO47. Only a short press
+# is registered; the SDK state selects start or stop.
+CONFIG_MYBOT_KEY_GPIO=47
+CONFIG_MYBOT_KEY_ACTIVE_LEVEL=0
 
 # Robot R2 GC9503CV MIPI display; LVGL renders RGB565 strips with a 90-degree
 # logical rotation on the 480x640 panel.

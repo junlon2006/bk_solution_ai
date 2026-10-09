@@ -4,11 +4,12 @@
 /* Verified Robot R2 panel power/reset/backlight and speaker amplifier. */
 #define GPIO_DEFAULT_DEV_CONFIG \
 { \
-    /* Robot V2 wires its four buttons as two resistor ladders on ADC pads, so
-     * the pads must stay high-Z with no pull: an internal pull-up loads the
-     * divider and skews the millivolts the adc_key component compares against.
-     * GPIO13 is ADC15 (S2/S3), GPIO28 is ADC4 (S4/S5). The board's fifth
-     * button drives the SoC CEN pin and never reaches firmware. */ \
+    /* The single conversation key KEY1 is on GPIO47, active low with an
+     * internal pull-up. */ \
+    {GPIO_47, GPIO_SECOND_FUNC_ENABLE, GPIO_DEV_GPIO_INPUT, \
+     GPIO_DEV_INVALID, GPIO_PULL_UP_EN, GPIO_INT_DISABLE, \
+     GPIO_INT_TYPE_FALLING_EDGE, GPIO_LOW_POWER_DISCARD_IO_STATUS, \
+     GPIO_DRIVER_CAPACITY_0, GPIO_INIT_ENABLE}, \
     {GPIO_13, GPIO_SECOND_FUNC_DISABLE, GPIO_DEV_INVALID, \
      GPIO_DEV_INVALID, GPIO_PULL_DISABLE, GPIO_INT_DISABLE, \
      GPIO_INT_TYPE_LOW_LEVEL, GPIO_LOW_POWER_DISCARD_IO_STATUS, \
