@@ -9,6 +9,52 @@ SSID 由配网模块复制投递。SDK 的 `include/src` 快照已单独同步�
 旧直接渲染字体及其独立许可证已删除，可从 Git 历史恢复；新资源许可见
 `components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md`。
 
+## 2026-10-10 SDK main 同步与挂断顺序复核
+
+远端 `main` 已确认并同步到 `cfd178a02fa94775cf01dc77e344f4ce5930225c`（PR #109），
+SDK 版本仍为 1.2.0。整套 56 个 `include/src` 文件从该提交导入；相对上一版 `0643978`
+仅生命周期实现与内部结构变化，公开平台头文件没有变化。
+`SDK_REVISION` 和第三方声明已更新，最终聚合 SHA256 为
+`bd59fb9a4f7aced74d5b8e770da869897229316c284e4ccded4d2aa8e667fa7a`。
+
+唯一保留的目标补丁是既有 HTTPS 请求/响应 body 日志；RTM 日志等级调整已由用户回退，
+`src/rtc/mybot_agora_rtc.c` 与上游逐字一致。AVDK、AOSL、RTSA、R2 板级配置和平台适配
+没有修改。本次同步基于 Solution `61cfb71ec1c87b8f1193d24dd137d4dd03cf5344`。
+
+SDK 现在先停止视频、退出 RTC/RTM、清理会话 PCM 并恢复 READY，再用原会话 ID 和停止
+原因发送一次 HTTPS 停止通知。通知失败只记录 warning，不重试，也不会重新开启媒体。
+断网/网络代次变化的响应仍会过滤，设备鉴权被拒绝时仍重新配对。
+HTTP 仍在控制线程同步执行：本地音视频和 LCD 不再等待远端响应，但紧接着开始新会话或
+调用 `mybot_stop()` 仍可能等待正在执行的通知请求。远端自动结束依赖设备服务支持设备
+离开 RTC channel 后终止会话。
+
+验证结果：
+
+- 已核对该提交的完整 PORTING/EMBEDDED 文档、涉及的平台契约及 BK7259 RTSA/RTM 参考。
+  单键状态查询、LCD 挂接、双麦 ADC2 AEC、视频停止顺序和恢复出厂均无需新增平台改动。
+- 最终带 HTTPS 日志补丁的 vendored SDK 使用 video=ON、cloud AEC=OFF、60 ms ptime，
+  上游既有 22/22 主机测试通过，覆盖本地停止先于 HTTP、单次通知、重复请求、断网、
+  重新配对及 app/RTC/media。19 个单元测试和公共头文件测试使用 ASan/UBSan；两个 CMake
+  集成测试按上游配置关闭 sanitizer。LeakSanitizer 因 ptrace 环境限制关闭，不计为通过。
+- 中文原工程执行 clean/build，再核准回退 RTM 日志后的最终增量构建；英文使用独立工程
+  `scripts/build_all.py --language en-US`，两者 AP/CP 编译与合包通过。
+- 最终中文配置为 `CONFIG_MYBOT_LANGUAGE_ZH_CN=1`、`CONFIG_MYBOT_VIDEO=1`；ELF 为 ARM32、
+  小端、EABI5 hard-float。`git diff --check`、快照路径集合、实际摘要和声明补丁复核通过。
+- 旧边界检查器仍使用过期 SDK/AVDK 锁及旧 LCD/配网假设，并扫描参考资料，未计为通过。
+
+| 区域 | 中文使用量 | 英文使用量 |
+| --- | ---: | ---: |
+| AP Flash | 1,941,100 字节 | 1,941,060 字节 |
+| AP 静态 RAM | 152,788 字节 | 152,788 字节 |
+| AP DTCM | 35,744 字节 | 35,744 字节 |
+| CP Flash | 1,295,948 字节 | 1,295,948 字节 |
+
+中文版 `package/all-app.bin` SHA256 为
+`9a7d22fe63d7ed6c064c30e1dfaa58ae316279ad474e74a53e97faa0c3fe42db`。
+本机构建、主机测试及检查日志保留在 `/tmp/mybot-sdk-refresh.6Dj0Bx/`，不属于源码或构建
+输入。尚未对这版固件完成真机验证；烧录后应检查松手至本地音视频停止的耗时、屏幕保持
+点亮、连续开关会话、离线挂断和长按恢复出厂。
+
 ## 2026-10-10 R2 与恢复出厂复核
 
 功能验证基线为 Solution `0ebb7f5821cb5084f39038961e0ebd5ad50816d1`，父仓库 `ffb9c3a`

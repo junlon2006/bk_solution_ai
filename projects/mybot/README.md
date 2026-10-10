@@ -83,6 +83,11 @@ released to arm a new gesture. Five seconds is the gesture threshold; actual
 completion also depends on SDK and driver teardown. The CEN button remains
 hardware reset only; double-press, volume, and other key actions are not registered.
 
+Normal conversation hangup stops local video/RTC and clears session PCM before
+publishing READY and sending one HTTPS stop notification. Notification failure
+does not restart media or retry; HTTP still runs synchronously on the SDK
+control worker, so a subsequent start can wait for it to finish.
+
 The key timer posts requests; `ap_main.c` executes reset in the product task.
 Its order is:
 
