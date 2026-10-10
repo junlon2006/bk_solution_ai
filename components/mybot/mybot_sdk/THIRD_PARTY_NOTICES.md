@@ -26,8 +26,12 @@ The following asset paths are relative to `platforms/bk7259/`.
 - `display/lvgl_fonts.c` contains the MyBot UI Sans 20-pixel subset derived
   from Source Han Sans SC Normal, copyright 2014-2021 Adobe. It is licensed
   under SIL OFL-1.1 in `display/assets/licenses/LVGL_VIEW_FONT_LICENSE.txt`.
-  The generated data is unchanged from the recorded ESP32 revision and uses
-  the distinct MyBot UI Sans name.
+  The target regenerates its 170-glyph subset with
+  `display/generate-lvgl-font.py`, adapted from the reference's MIT-licensed
+  generator, to cover the current fixed UI and factory-reset vocabulary.
+  The source font revision remains pinned by SHA256
+  `1ee89e1669362dee13851129c0a8a791a87521eb4148e5efbf5d26596738e25b`.
+  The modified font uses the distinct MyBot UI Sans name.
 - `display/lvgl_assets.c` contains four rasterized Noto Color Emoji glyphs,
   copyright 2021 Google Inc., licensed under SIL OFL-1.1 in
   `display/assets/ui/noto_emoji/LICENSE.txt`. Upstream revision and source

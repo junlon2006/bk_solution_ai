@@ -20,11 +20,23 @@ revision, format and generation details are retained in
 `assets/ui/noto_emoji/SOURCES.json`.
 
 The four constant 64x64 ARGB8888 emoji images total 65,536 pixel bytes. The
-20-pixel MyBot UI Sans font contains 165 glyphs, including ASCII and the fixed
+20-pixel MyBot UI Sans font contains 170 glyphs, including ASCII and the fixed
 Chinese UI vocabulary. It includes the four glyphs needed by the web-console
 pairing prompt: `页`, `控`, `制`, and `台`. Arbitrary
 Chinese SSIDs or chat text require a separately extended font. The Chinese ready
 hint is `开始对话`; the English hint is `Press to start`, matching button control.
+
+The local `generate-lvgl-font.py` generator is adapted from the reference's
+MIT-licensed font generator and reads the fixed vocabulary in `lvgl_view.cc`.
+It regenerates the 20-pixel, 4 bpp subset from the OFL-licensed
+`SourceHanSansSC-Normal.otf`, with required input SHA256
+`1ee89e1669362dee13851129c0a8a791a87521eb4148e5efbf5d26596738e25b`.
+The current subset includes all Chinese factory-reset messages and punctuation,
+uses 22,018 bitmap bytes, and was generated with Pillow 10.2.0 / FreeType 2.13.2.
+The source font is an external generation input; firmware embeds only this
+subset. Run `python3 generate-lvgl-font.py --font /path/to/SourceHanSansSC-Normal.otf`
+to regenerate, or `python3 generate-lvgl-font.py --check` to check UI glyph
+coverage without the source font or Pillow.
 
 BK7259 changes remove ESP-IDF and Wi-Fi controller dependencies, receive a copied
 SSID from the display owner, keep dynamic label strings in fixed view storage,

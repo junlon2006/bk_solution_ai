@@ -3,6 +3,7 @@
 #define MYBOT_LVGL_VIEW_H_
 
 #include "lvgl.h"
+#include "bk7259_factory_reset.h"
 #include <mybot/platform/mybot_lcd.h>
 
 #ifdef __cplusplus
@@ -17,6 +18,9 @@ extern "C" {
  * Chinese glyphs cover the fixed UI vocabulary, not arbitrary UTF-8 SSIDs. */
 int mybot_lvgl_view_create(lv_display_t *display);
 void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *provisioning_ssid);
+/* Product-owned override; the LCD snapshot owner keeps SDK updates from
+ * replacing it. Uses existing widgets/timer and borrows no external strings. */
+void bk7259_lvgl_view_show_factory_reset(bk7259_factory_reset_screen_t screen);
 void mybot_lvgl_view_destroy(void);
 
 #ifdef __cplusplus

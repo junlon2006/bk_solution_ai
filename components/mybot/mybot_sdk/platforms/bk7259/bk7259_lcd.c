@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "bk7259_ops.h"
+#include "bk7259_factory_reset.h"
 #include "bk7259_platform_log.h"
 #include "display/lvgl_view.h"
 
@@ -79,6 +80,8 @@ typedef struct {
     bool accepting;
     bool sdk_attached;
     bool pending;
+    bool factory_reset_active;
+    bk7259_factory_reset_screen_t factory_reset_screen;
     mybot_lcd_content_t latest;
     char provisioning_ssid[LCD_SSID_CAPACITY];
 } lcd_context_t;
@@ -273,7 +276,11 @@ static void ui_worker(void *arg)
          * updates. The snapshot lock is never held during rendering/flush. */
         if (rtos_lock_mutex(&s_snapshot_lock) == BK_OK) {
             if (s_lcd.pending && s_lcd.accepting) {
-                mybot_lvgl_view_update(&s_lcd.latest, s_lcd.provisioning_ssid);
+                if (s_lcd.factory_reset_active) {
+                    bk7259_lvgl_view_show_factory_reset(s_lcd.factory_reset_screen);
+                } else {
+                    mybot_lvgl_view_update(&s_lcd.latest, s_lcd.provisioning_ssid);
+                }
                 s_lcd.pending = false;
             }
             unlock(&s_snapshot_lock);
@@ -623,6 +630,7 @@ int bk7259_lcd_prepare(void)
     s_lcd.latest = (mybot_lcd_content_t){.screen = MYBOT_LCD_SCREEN_STARTING};
     s_lcd.provisioning_ssid[0] = '\0';
     s_lcd.pending = false;
+    s_lcd.factory_reset_active = false;
     s_lcd.accepting = true;
     s_lcd.sdk_attached = false;
     /* No other LVGL calls after this transfer until worker_done. */
@@ -688,10 +696,33 @@ static int publish_content(const mybot_lcd_content_t *content)
     if (!s_lcd.accepting || aosl_atomic_read(&s_lcd.stopping)) {
         return -1;
     }
+    /* A product reset supersedes workflow transitions until reboot. SDK stop
+     * still gets a successful render result without replacing this override. */
+    if (s_lcd.factory_reset_active) {
+        return 0;
+    }
     s_lcd.latest = *content;
     s_lcd.pending = true;
     notify(&s_lcd.wake);
     return 0;
+}
+
+int bk7259_lcd_show_factory_reset(bk7259_factory_reset_screen_t screen)
+{
+    if (screen < BK7259_FACTORY_RESET_RESTORING || screen > BK7259_FACTORY_RESET_REBOOTING ||
+        !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
+        return -1;
+    }
+    int ret = -1;
+    if (s_lcd.prepared && s_lcd.accepting && !aosl_atomic_read(&s_lcd.stopping)) {
+        s_lcd.factory_reset_active = true;
+        s_lcd.factory_reset_screen = screen;
+        s_lcd.pending = true;
+        notify(&s_lcd.wake);
+        ret = 0;
+    }
+    unlock(&s_snapshot_lock);
+    return ret;
 }
 
 int bk7259_lcd_show_screen(mybot_lcd_screen_t screen)
@@ -711,7 +742,7 @@ void bk7259_lcd_set_provisioning_ssid(const char *ssid)
     if (!ssid || !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
         return;
     }
-    if (s_lcd.accepting) {
+    if (s_lcd.accepting && !s_lcd.factory_reset_active) {
         size_t len = strnlen(ssid, sizeof(s_lcd.provisioning_ssid) - 1U);
         memcpy(s_lcd.provisioning_ssid, ssid, len);
         s_lcd.provisioning_ssid[len] = '\0';
@@ -728,7 +759,7 @@ static int lcd_sdk_init(void **out_context)
     }
     *out_context = NULL;
     int ret = -1;
-    if (s_lcd.prepared && s_lcd.accepting && !s_lcd.sdk_attached &&
+    if (s_lcd.prepared && s_lcd.accepting && !s_lcd.sdk_attached && !s_lcd.factory_reset_active &&
         !aosl_atomic_read(&s_lcd.stopping)) {
         s_lcd.sdk_attached = true;
         *out_context = &s_lcd;
@@ -754,10 +785,12 @@ static void lcd_sdk_destroy(void *context)
     if (context != &s_lcd || !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
         return;
     }
-    /* Product UI remains alive for provisioning. Clear queued SDK work before
-     * allowing a new product-owned screen; already applied content is a copy. */
+    /* Product UI remains alive for provisioning and reset. Detaching the SDK
+     * must not discard a pending reset phase owned by the product. */
     s_lcd.sdk_attached = false;
-    s_lcd.pending = false;
+    if (!s_lcd.factory_reset_active) {
+        s_lcd.pending = false;
+    }
     unlock(&s_snapshot_lock);
 }
 

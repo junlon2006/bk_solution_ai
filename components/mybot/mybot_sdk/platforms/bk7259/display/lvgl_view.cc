@@ -76,6 +76,12 @@ constexpr const char *kVoiceprintSaved = "声纹已注册";
 constexpr const char *kPairedNotification = "配对成功";
 constexpr const char *kVoiceprintNotification = "声纹注册成功";
 constexpr const char *kNetworkNotification = "网络已恢复";
+constexpr const char *kResetStatus = "恢复出厂";
+constexpr Presentation kResetScreens[] = {
+    {"正在恢复出厂设置", kResetStatus, "请勿断电", LV_SYMBOL_REFRESH, kTheme.amber},
+    {"恢复失败，\n请长按重试", kResetStatus, "长按5秒重试", LV_SYMBOL_WARNING, kTheme.red},
+    {"恢复完成，正在重启", kResetStatus, "请勿断电", LV_SYMBOL_POWER, kTheme.green},
+};
 #else
 constexpr Presentation kScreens[] = {
     {"Starting", "Starting", "Please wait", LV_SYMBOL_POWER, kTheme.blue},
@@ -96,6 +102,15 @@ constexpr const char *kVoiceprintSaved = "VP registered";
 constexpr const char *kPairedNotification = "Paired successfully";
 constexpr const char *kVoiceprintNotification = "Voiceprint registered";
 constexpr const char *kNetworkNotification = "Wi-Fi reconnected";
+constexpr const char *kResetStatus = "Factory reset";
+constexpr Presentation kResetScreens[] = {
+    {"Restoring factory settings", kResetStatus, "Keep power connected", LV_SYMBOL_REFRESH,
+     kTheme.amber},
+    {"Reset failed.\nHold 5s to retry", kResetStatus, "Hold 5s to retry", LV_SYMBOL_WARNING,
+     kTheme.red},
+    {"Reset complete. Restarting", kResetStatus, "Keep power connected", LV_SYMBOL_POWER,
+     kTheme.green},
+};
 #endif
 
 static_assert(sizeof(kScreens) / sizeof(kScreens[0]) == MYBOT_LCD_SCREEN_COUNT,
@@ -568,4 +583,34 @@ void mybot_lvgl_view_destroy(void) {
         lv_obj_delete(s_view.root);
     }
     s_view = View{};
+}
+
+void bk7259_lvgl_view_show_factory_reset(bk7259_factory_reset_screen_t screen) {
+    if (!s_view.root || screen < BK7259_FACTORY_RESET_RESTORING ||
+        screen > BK7259_FACTORY_RESET_REBOOTING) {
+        return;
+    }
+    const Presentation &presentation = kResetScreens[screen];
+    clear_notification();
+    s_view.activity_mode = Activity::None;
+    s_view.has_content = false;
+    set_hidden(s_view.badge, false);
+    set_hidden(s_view.emoji, true);
+    set_hidden(s_view.code, true);
+    set_hidden(s_view.activity, true);
+    lv_label_set_long_mode(s_view.title, LV_LABEL_LONG_WRAP);
+    lv_obj_set_height(s_view.title, 60);
+    lv_obj_set_y(s_view.title, s_view.content_y + 81);
+    lv_label_set_long_mode(s_view.notice, LV_LABEL_LONG_CLIP);
+    set_text(s_view.title, presentation.title);
+    set_text(s_view.status, presentation.status);
+    set_text(s_view.icon, presentation.icon);
+    set_text(s_view.notice, presentation.notice);
+    const lv_color_t accent = lv_color_hex(presentation.accent);
+    lv_obj_set_style_border_color(s_view.badge, accent, 0);
+    lv_obj_set_style_text_color(s_view.icon, accent, 0);
+    lv_obj_set_style_text_color(s_view.notice, accent, 0);
+    s_view.accent = presentation.accent;
+    s_view.notice_color = presentation.accent;
+    update_timer();
 }

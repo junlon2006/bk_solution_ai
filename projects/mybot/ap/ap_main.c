@@ -2,6 +2,7 @@
 
 #include <components/bk_uid.h>
 #include <components/log.h>
+#include <components/system.h>
 #include <media_service.h>
 #include <mbedtls/md.h>
 #include <os/os.h>
@@ -11,6 +12,8 @@
 #include <mybot/mybot_version.h>
 
 #include <mybot_bk7259_platform.h>
+#include <bk7259_factory_reset.h>
+#include <bk7259_key.h>
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -124,9 +127,79 @@ static int mybot_build_config(void)
     return written > 0 && (size_t)written < sizeof(s_config.device_id) ? 0 : -1;
 }
 
+static void show_factory_reset(bk7259_factory_reset_screen_t screen)
+{
+    if (bk7259_lcd_show_factory_reset(screen) < 0) {
+        BK_LOGE(TAG, "factory reset display update failed: phase=%d\r\n", (int)screen);
+    }
+}
+
+/* The product task owns this operation. A failed reset stays stopped and waits
+ * for a fresh long press; its durable intent is also retried after power loss. */
+static void mybot_factory_reset_loop(bool requested)
+{
+    for (;;) {
+        if (!requested) {
+            (void)bk7259_key_take_conversation_request();
+            requested = bk7259_factory_reset_take_request();
+            if (!requested) {
+                (void)rtos_delay_milliseconds(MYBOT_POLL_INTERVAL_MS);
+                continue;
+            }
+        }
+        requested = false;
+        (void)bk7259_factory_reset_take_request();
+        (void)bk7259_key_take_conversation_request();
+        show_factory_reset(BK7259_FACTORY_RESET_RESTORING);
+
+        /* Writing intent does not erase live SDK data. Persist it first so a
+         * power loss during shutdown also resumes recovery on the next boot. */
+        int intent_result = bk7259_factory_reset_begin();
+        BK_LOGW(TAG, "stopping SDK for factory reset\r\n");
+        mybot_stop();
+        if (mybot_is_running() || mybot_get_state() != MYBOT_STATE_STOPPED) {
+            BK_LOGE(TAG, "factory reset deferred: SDK has not stopped\r\n");
+            show_factory_reset(BK7259_FACTORY_RESET_FAILED);
+            continue;
+        }
+        if (bk7259_factory_reset_disconnect_network() < 0) {
+            BK_LOGE(TAG, "factory reset deferred: network teardown has not completed\r\n");
+            show_factory_reset(BK7259_FACTORY_RESET_FAILED);
+            continue;
+        }
+        if (intent_result < 0 || bk7259_factory_reset_clear() < 0) {
+            BK_LOGE(TAG, "factory reset incomplete; hold five seconds to retry\r\n");
+            show_factory_reset(BK7259_FACTORY_RESET_FAILED);
+            continue;
+        }
+
+        show_factory_reset(BK7259_FACTORY_RESET_REBOOTING);
+        BK_LOGW(TAG, "factory reset complete: restarting for provisioning\r\n");
+        (void)rtos_delay_milliseconds(250);
+        bk_reboot();
+        /* The reboot API may return before the watchdog resets both cores. */
+        for (;;) {
+            (void)rtos_delay_milliseconds(1000);
+        }
+    }
+}
+
+static void mybot_poll_conversation_key(void)
+{
+    if (!bk7259_key_take_conversation_request() ||
+        bk7259_factory_reset_requested()) {
+        return;
+    }
+    mybot_state_t state = mybot_get_state();
+    if (state == MYBOT_STATE_READY) {
+        bk7259_key_dispatch_conversation(true);
+    } else if (state == MYBOT_STATE_IN_CONVERSATION) {
+        bk7259_key_dispatch_conversation(false);
+    }
+}
+
 static int mybot_run(void)
 {
-    bool aosl_ref_held = false;
     mybot_state_t last_state = MYBOT_STATE_STOPPED;
     bool state_valid = false;
 
@@ -139,7 +212,6 @@ static int mybot_run(void)
      * but they can run before mybot_start() acquires its own reference. Keep
      * one product-lifetime reference so both paths share initialized globals. */
     aosl_ctor();
-    aosl_ref_held = true;
     /* SDK core and platform adapters use AOSL; raise its gate from ERROR. */
     aosl_set_log_level(AOSL_LOG_NOTICE);
     mybot_log_state_transition(&last_state, &state_valid);
@@ -157,6 +229,17 @@ static int mybot_run(void)
         return -1;
     }
 
+    int reset_pending = bk7259_factory_reset_pending();
+    if (reset_pending != 0) {
+        if (reset_pending > 0) {
+            BK_LOGW(TAG, "resuming factory reset after interrupted shutdown\r\n");
+        } else {
+            BK_LOGE(TAG, "factory reset intent invalid; waiting for a fresh long press\r\n");
+            show_factory_reset(BK7259_FACTORY_RESET_FAILED);
+        }
+        mybot_factory_reset_loop(reset_pending > 0);
+    }
+
     if (mybot_bk7259_platform_register() < 0) {
         BK_LOGE(TAG, "platform registration failed\r\n");
         mybot_bk7259_platform_shutdown();
@@ -164,10 +247,12 @@ static int mybot_run(void)
         return -1;
     }
 
-    int result = -1;
     mybot_log_state_transition(&last_state, &state_valid);
     int network_result = mybot_bk7259_ensure_network(s_config.device_id);
     mybot_log_state_transition(&last_state, &state_valid);
+    if (bk7259_factory_reset_take_request()) {
+        mybot_factory_reset_loop(true);
+    }
     if (network_result < 0) {
         BK_LOGE(TAG, "network setup failed\r\n");
     } else {
@@ -182,6 +267,10 @@ static int mybot_run(void)
             mybot_log_state_transition(&last_state, &state_valid);
             while (mybot_is_running()) {
                 mybot_log_state_transition(&last_state, &state_valid);
+                if (bk7259_factory_reset_take_request()) {
+                    mybot_factory_reset_loop(true);
+                }
+                mybot_poll_conversation_key();
                 if (mybot_get_state() == MYBOT_STATE_FAILED) {
                     BK_LOGE(TAG, "SDK entered the failed state\r\n");
                     break;
@@ -197,19 +286,20 @@ static int mybot_run(void)
             mybot_log_state_transition(&last_state, &state_valid);
             if (mybot_is_running() || mybot_get_state() != MYBOT_STATE_STOPPED) {
                 BK_LOGE(TAG, "SDK shutdown did not reach STOPPED\r\n");
-            } else {
-                result = stop_state == MYBOT_STATE_FAILED ? -1 : 0;
             }
         }
     }
 
     mybot_stop();
     mybot_log_state_transition(&last_state, &state_valid);
-    mybot_bk7259_platform_shutdown();
-    if (aosl_ref_held) {
-        aosl_dtor();
+    /* Keep the physical key and product display alive after a startup/network
+     * failure too, so factory reset remains available without an SDK handler. */
+    if (bk7259_factory_reset_take_request()) {
+        mybot_factory_reset_loop(true);
     }
-    return result;
+    BK_LOGW(TAG, "product stopped: waiting for a factory reset request\r\n");
+    mybot_factory_reset_loop(false);
+    return -1;
 }
 
 static void mybot_app_task(beken_thread_arg_t arg)
