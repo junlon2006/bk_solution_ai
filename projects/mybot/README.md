@@ -8,6 +8,10 @@
 device-service control, bidirectional RTC audio, local provisioning and UI, and
 one-way encoded video uplink in one conversation.
 
+The `release/v4.0.1-mybot-r2` branch targets the Yunqu V1.0 R2 board with a
+GC9503CV MIPI LCD, KEY1/GPIO47, and dual analog microphones plus an amplifier
+feedback channel for hardware AEC.
+
 ## 2. AP and CP Roles
 
 | Core | Responsibility |
@@ -19,7 +23,8 @@ The `bk7259` project target builds and packages both cores.
 
 ## 3. Build
 
-Use the matching `bk_avdk_smp` release. From the `mybot-bk7259` repository root:
+Use the `bk_avdk_smp` revision pinned by the parent repository on the matching
+`release/v4.0.1-mybot-r2` line. From the `mybot-bk7259` repository root:
 
 ```bash
 make -C bk_solution_ai/projects/mybot bk7259 SDK_DIR="$PWD/bk_avdk_smp"
@@ -42,7 +47,115 @@ bk_solution_ai/projects/mybot/build/bk7259/mybot/package/app_pack.rbl
 The per-core ELF files are under `build/bk7259/mybot/bk7259_ap/` and
 `build/bk7259/mybot/bk7259/` relative to the project directory.
 
-## 4. Multimodal Video Uplink
+## 4. Startup
+
+AP initializes the BK runtime and media service, then creates the `mybot_app`
+product task. The task derives the stable `BK7259-...` ID from the chip UID,
+initializes AOSL, and prepares the product-owned LCD, network manager, and key,
+in that order.
+It checks `mybot.factory_reset.v1` before platform registration, Wi-Fi setup, or
+SDK startup: a valid marker resumes reset; a reported marker read/validation
+error displays reset failure and waits for a fresh long press.
+
+Without a reset marker, AP registers the platform and tries saved Wi-Fi. Missing
+or unusable credentials lead to APSTA provisioning at `http://192.168.4.1/`.
+After STA obtains IPv4 and the portal stops, the task starts the SDK for device
+authentication and pairing as needed. Pairing codes are entered in the web
+console. The product loop polls SDK state and handles key requests.
+
+Network/SDK failures retain the prepared key and display for factory-reset
+requests. Identity, platform-preparation, or descriptor-registration failures
+can exit startup; that recovery path is not guaranteed for those earlier errors.
+Descriptor-registration failure shuts down the prepared platform resources.
+
+## 5. Keys and Factory Reset
+
+| KEY1/GPIO47 action | Behavior |
+| --- | --- |
+| Short press and release | `READY`: start conversation; `IN_CONVERSATION`: stop conversation; other states ignore it |
+| Hold for 5 seconds | Request factory reset once; release does not toggle conversation |
+| Already held at platform preparation | Release first to arm a new gesture |
+
+The active-low key uses 20 ms scanning and two-sample debounce. Long press
+works after successful platform preparation, including provisioning and before
+SDK key attachment. A key held while the platform prepares must first be
+released to arm a new gesture. Five seconds is the gesture threshold; actual
+completion also depends on SDK and driver teardown. The CEN button remains
+hardware reset only; double-press, volume, and other key actions are not registered.
+
+The key timer posts requests; `ap_main.c` executes reset in the product task.
+Its order is:
+
+1. Show restoring status and persist `mybot.factory_reset.v1`.
+2. Stop the SDK and require `mybot_is_running() == false` and `STOPPED`.
+3. Stop the portal/SoftAP, scan, and STA; require completed teardown.
+4. Delete and verify absence of `mybot.device_auth`, `mybot.wifi.v1`, and
+   `mybot.volume.v1`, then delete the reset marker last.
+5. Show rebooting status and restart; normal startup enters Wi-Fi provisioning.
+
+SDK and provisioning writers stop before deletion, including the volume
+adapter's final persistence attempt. Only these product records are cleared;
+the UID-derived device ID stays the same and no server-side unbind request is
+sent. The next SDK startup uses the default speaker volume and registers/authenticates again according to
+the server's retained binding state.
+
+Failure displays a bilingual retry page and waits for a fresh five-second hold.
+Incomplete cleanup keeps the established marker; a final marker-deletion error
+attempts to restore it. Boot resumes valid pending resets before starting the
+network or SDK. A reported marker error requires an explicit new long press.
+The marker is written when the product task processes the request; loss of
+power before that point does not establish a pending reset. Failed network
+teardown keeps its resources owned for retry. Network cancellation returns control to the owner, which verifies all
+teardown results before deletion. The existing LCD worker retains restoring/
+failed/rebooting pages across SDK stop/detach.
+
+Module declarations are independent of the platform abstraction:
+
+- `platforms/bk7259/include/bk7259_key.h`: conversation request and event dispatch.
+- `platforms/bk7259/include/bk7259_factory_reset.h`: reset requests, persistent
+  intent/cleanup, network teardown, and reset display phases.
+- `platforms/bk7259/include/mybot_bk7259_platform.h`: platform registration and
+  preparation abstraction.
+
+These paths are relative to `components/mybot/mybot_sdk/`. The first two APIs
+use `bk7259_*` names. Reset storage is implemented in `bk7259_factory_reset.c`;
+it does not erase the whole EasyFlash environment.
+
+## 6. R2 Audio and Display
+
+Capture reads three differential analog ADC lanes:
+
+| ADC | Signal | Analog gain | Digital gain |
+| --- | --- | --- | --- |
+| ADC0 | Microphone 1 | 20 | 16 dB |
+| ADC1 | Microphone 2 | 20 | 16 dB |
+| ADC2 | HT6872 amplifier feedback | 0 | 0 dB |
+
+The ADC stream disables digital microphones and the appended digital reference
+(`dmic_en=0`, `adc_cfg.aec_en=0`). AEC is enabled in the downstream algorithm:
+
+```text
+onboard_mic_stream_v2 (ADC0 + ADC1 + ADC2)
+  -> aec_v3_algorithm_v2 (hardware AEC, in-channel reference ADC2)
+  -> raw stream -> 16 kHz mono signed 16-bit PCM -> RTC uplink
+```
+
+The AEC stage uses three ADC channels, `dual_ch=1`, traditional noise suppression,
+and VAD disabled. Its main output includes AEC, dual-microphone processing, and
+noise suppression. Speaker playback uses the onboard DAC stream and active-high
+GPIO50 amplifier enable. Volume changes apply speaker digital gain and save
+`mybot.volume.v1` synchronously; failures retry on a later set or adapter
+destruction. This board has no volume keys.
+
+The GC9503CV panel is native 480x640 with a logical 640x480 RGB565 UI. GPIO20
+enables the 3.3 V rail, GPIO29 the shared LCD/camera 2.8 V rail, GPIO42 resets the
+panel, and GPIO40 drives its active-low backlight. The LCD owner retains the
+shared rail; conversation/video teardown resets the camera sensor without
+blanking the display. The existing UI worker renders both SDK screens and
+bilingual restoring/failed/rebooting pages; reset status takes precedence over
+SDK stop/detach updates.
+
+## 7. Multimodal Video Uplink
 
 The default AP configuration enables `CONFIG_MYBOT_VIDEO=y`. The BK7259 video
 path is:
@@ -80,7 +193,12 @@ Video configuration is defined in:
 After changing video configuration, run a clean rebuild so the generated
 configuration cannot retain stale values.
 
-## 5. Real-Device Validation
+## 8. Real-Device Validation
+
+The user confirmed R2 LCD bring-up, conversation start/stop without blanking,
+audio/AEC, and the factory-reset feature work on hardware.
+The checklist below describes regression coverage; it does not imply every
+fault or power-interruption scenario has already been tested on the device.
 
 - [ ] Cold boot the combined `all-app.bin` and confirm both AP and CP start.
 - [ ] Confirm the installed GC2053 or CV2005 camera is detected and the source reports 1280x720 at 5 fps with 640x480 H.264 output.
@@ -90,3 +208,12 @@ configuration cannot retain stale values.
 - [ ] Verify a periodic IDR about every 6 seconds and that an RTSA key-frame request forces a new IDR.
 - [ ] Exercise constrained Wi-Fi and confirm RTSA bitrate updates stay within 256-512 kbit/s without breaking audio.
 - [ ] End, restart, and interrupt conversations repeatedly; confirm the encoder, frame pool, camera, and RTC resources stop and restart cleanly.
+- [ ] Short press/release starts and stops a conversation without blanking the LCD.
+- [ ] A hold below 5 seconds performs only the state-appropriate short action on release; a 5-second hold resets once and suppresses that action.
+- [ ] Hold the key across reboot, then release; confirm a new gesture is required before another reset.
+- [ ] Request reset during conversation, saved-STA connection, and APSTA provisioning; confirm shutdown precedes record deletion and the reset page remains visible.
+- [ ] Confirm Wi-Fi credentials, local authentication, and saved volume are cleared, while device ID and server-side binding are preserved.
+- [ ] Interrupt power after the reset marker is persisted; confirm boot resumes cleanup before network/SDK startup.
+- [ ] Inject shutdown/storage failures; confirm the failure page waits for a fresh 5-second hold rather than rebooting or erasing while writers remain active.
+
+See [UI_VALIDATION.md](./UI_VALIDATION.md) for build and host-test evidence.

@@ -40,9 +40,15 @@ coverage without the source font or Pillow.
 
 BK7259 changes remove ESP-IDF and Wi-Fi controller dependencies, receive a copied
 SSID from the display owner, keep dynamic label strings in fixed view storage,
-and expand the card to the 385x320 logical screen. The rounded Robot V2 bezel is
+and size the card for the R2 panel's 640x480 logical screen (native GC9503CV
+480x640). The rounded bezel is
 accounted for with header insets of 40 pixels horizontally and 14 vertically,
 footer insets of 32 pixels horizontally and 18 from the bottom, and a 16-pixel
 horizontal card margin. Text widths and pairing-code font selection follow the
 actual label width inside these margins. All view/timer operations run
 on the same display owner task. The view never owns the panel or framebuffer.
+
+The R2 product adds Chinese and English factory-reset restoring, failed, and
+rebooting presentations through `bk7259_lvgl_view_show_factory_reset()`. The LCD
+snapshot owner gives this product status priority over SDK workflow updates and
+detach, reusing the existing widgets, timer, and framebuffers.
