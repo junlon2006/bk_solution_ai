@@ -10,7 +10,8 @@ one-way encoded video uplink in one conversation.
 
 The `release/v4.0.1-mybot-r2` branch targets the Yunqu V1.0 R2 board with a
 GC9503CV MIPI LCD, KEY1/GPIO47, and dual analog microphones plus an amplifier
-feedback channel for hardware AEC.
+feedback channel for hardware AEC. Its normal UI follows the simulator's
+process-gray skin and pixel-glasses face.
 
 ## 2. AP and CP Roles
 
@@ -160,6 +161,100 @@ blanking the display. The existing UI worker renders both SDK screens and
 bilingual restoring/failed/rebooting pages; reset status takes precedence over
 SDK stop/detach updates.
 
+The LVGL 9.5.0 face follows the user-supplied simulator's `process` skin and
+`geek` face style: a fixed `#050708` black glass background and gray decorations
+avoid visible dark-gradient banding in RGB565. The neutral
+idle face uses `#f1f1ee` off-white glasses, two curved eyes, and a smile. The
+greeting uses `#f1ca79` warm-gold glasses, a curved left eye, a round right eye,
+and a smile.
+
+| Product stage | Display |
+| --- | --- |
+| Startup, provisioning, authentication, or pairing | Bilingual operational guidance; pairing codes are entered in the web console |
+| Actual SDK `READY` | Neutral idle face by default |
+| Entering and remaining in `IN_CONVERSATION` | Greeting face by default |
+| Hangup returning to `READY` | Neutral idle face |
+| Network/startup error | Operational error guidance |
+| Factory reset | Restoring, failed, or rebooting page, with priority over SDK display updates |
+
+Wi-Fi provisioning does not change SDK readiness or bypass pairing. Normal
+idle and conversation screens hide voiceprint and listening/thinking/speaking
+indicators. The SDK continues processing those events, but they do not change
+the face, show toasts, or replay the transition. The simulator's four terminal
+lines are restored:
+
+```text
+> OIM / R2
+> mood: neutral
+> state: online
+> agora / realtime
+```
+
+The mood uses the selected expression's lowercase name. The state line is
+`standby` for `SLEEP`, otherwise `online`; these are artwork labels, not SDK or
+connectivity state. The `</>` signature and cursor on the last row remain.
+This UI does not control gimbal movement.
+
+All 23 simulator expressions are implemented, in the simulator's enum order:
+
+```text
+NEUTRAL, GREETING, HAPPY, EXCITED, CURIOUS, CONFUSED, THINKING, LISTENING,
+SURPRISED, SHY, PROUD, LOVE, SLEEPY, BORED, SAD, PLEADING, APOLOGY, WORRIED,
+ANNOYED, REFUSE, PROCESSING, ERROR, SLEEP
+```
+
+The independent `include/bk7259_expression.h` module exposes local display
+requests, ready for later command integration:
+
+```c
+#include "bk7259_expression.h"
+
+int show_happy(void) {
+    return bk7259_lcd_set_expression(BK7259_EXPRESSION_HAPPY);
+}
+```
+
+`bk7259_expression_from_name()` converts an exact simulator name while ignoring
+ASCII letter case; `bk7259_expression_name()` returns its stable uppercase
+name. `bk7259_lcd_clear_expression()` restores NEUTRAL or GREETING for the current
+workflow screen. Set/clear return `0` when the owner accepts the copied request,
+not when scanout completes, and `-1` for an invalid expression or an unavailable
+face page. They use the existing LCD snapshot lock and mailbox, never caller-side
+LVGL. Requests are accepted only on prepared, running `READY`/`IN_CONVERSATION`
+pages; provisioning, reset, and shutdown reject them. Workflow screen changes
+clear overrides, indicator-only updates preserve them, and requesting the same
+active expression does not replay its transition.
+
+The additional 21 expressions do not cycle automatically. MCP/RTM command
+mapping and UART actions are outside this change. Selecting the ERROR or SLEEP
+artwork does not enter the SDK's error state or suspend the hardware.
+
+The simulator's 1024x896 artwork is scaled uniformly by 9/16 to a virtual
+576x504 area at logical `(32,-12)` on the 640x480 display. The cropped top and
+bottom contain only empty canvas space; visible text and face geometry stay
+inside the rounded-bezel safe area. The glasses span about 345 pixels.
+Terminal rows retain the reference's 37-pixel source grid, and the signature
+is left-aligned. Fixed LVGL widgets and sampled curves draw the face. Five small
+immutable A8 masks (13631 bytes in Flash) render hearts, stars, filled ellipses, cheeks, and tears
+without triangle-fan seams. They are generated locally from the reference
+geometry; no full-face images or additional canvas buffer are required.
+`CONFIG_MYBOT_LVGL_UI_ANIMATIONS` enables short
+face transitions, expression motion, and a 500 ms cursor blink; there is no light-theme selector.
+Rendering uses the existing owner task, a 20480-byte RGB565 draw strip, two
+614400-byte scanout buffers, and an 8192-byte task stack. The configured refresh
+interval is 50 ms. Internal LVGL allocations and stack peaks still need target
+measurement while audio/video run.
+
+Terminal decorations use read-only BK7259 Terminal subsets derived from
+DejaVu Sans Mono Bold: 15-pixel ASCII and a 16-pixel `</>` signature, totaling
+4634 bitmap bytes. These replace Unscii 16; their actual LVGL text advances
+closely match the reference's scaled text proportions.
+The cursor follows the actual text width. Bilingual operation text uses the
+existing MyBot UI Sans 20 subset. The old emoji sources and
+licenses remain for provenance, but the emoji image source is no longer linked.
+See [display/SOURCES.md](../../components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)
+for simulator hashes, mask generation/reproduction, and resource origins.
+
 ## 7. Multimodal Video Uplink
 
 The default AP configuration enables `CONFIG_MYBOT_VIDEO=y`. The BK7259 video
@@ -202,6 +297,8 @@ configuration cannot retain stale values.
 
 The user confirmed R2 LCD bring-up, conversation start/stop without blanking,
 audio/AEC, and the factory-reset feature work on hardware.
+The user confirmed basic process-gray pixel-glasses rendering. The restored
+four-line layout and complete 23-expression set await hardware validation.
 The checklist below describes regression coverage; it does not imply every
 fault or power-interruption scenario has already been tested on the device.
 
@@ -214,6 +311,11 @@ fault or power-interruption scenario has already been tested on the device.
 - [ ] Exercise constrained Wi-Fi and confirm RTSA bitrate updates stay within 256-512 kbit/s without breaking audio.
 - [ ] End, restart, and interrupt conversations repeatedly; confirm the encoder, frame pool, camera, and RTC resources stop and restart cleanly.
 - [ ] Short press/release starts and stops a conversation without blanking the LCD.
+- [ ] Verify neutral idle after actual `READY`, greeting for the entire conversation, and neutral immediately after hangup.
+- [ ] Verify four terminal rows, lowercase expression names, and `standby` only for SLEEP; compare all 23 faces and their motion with the simulator.
+- [ ] Exercise local set/clear requests, invalid names/IDs, indicator updates, workflow changes, and reset priority; verify no automatic expression cycling.
+- [ ] Verify RTM voiceprint/listening/thinking/speaking updates do not show overlays or restart face transitions.
+- [ ] Verify both languages, web-console pairing instructions, round-bezel clearance, and factory-reset display priority.
 - [ ] A hold below 5 seconds performs only the state-appropriate short action on release; a 5-second hold resets once and suppresses that action.
 - [ ] Hold the key across reboot, then release; confirm a new gesture is required before another reset.
 - [ ] Request reset during conversation, saved-STA connection, and APSTA provisioning; confirm shutdown precedes record deletion and the reset page remains visible.

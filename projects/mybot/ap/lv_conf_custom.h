@@ -11,7 +11,7 @@
 /* The BK7259 LCD owner calls LVGL from one task. Do not let LVGL create
  * FreeRTOS draw threads or use its generic FreeRTOS synchronization adapter. */
 #define LV_USE_OS LV_OS_NONE
-#define LV_DEF_REFR_PERIOD 100
+#define LV_DEF_REFR_PERIOD 50
 #define LV_INDEV_REFR_PERIOD 100
 #define LV_COLOR_DEPTH 16
 #define LV_USE_STDLIB_MALLOC LV_STDLIB_CUSTOM
@@ -66,7 +66,7 @@
 #define LV_USE_FONT_COMPRESSED 0
 #define LV_USE_FONT_PLACEHOLDER 1
 
-/* Only the shared MyBot view's widgets and layout are needed. */
+/* Fixed pixel glasses and the product's setup/recovery text share one owner. */
 #define LV_USE_ANIMIMG 0
 #define LV_USE_ARC 1
 #define LV_USE_ARCLABEL 0

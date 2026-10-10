@@ -1,205 +1,125 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (c) 2026 Project Contributors */
-/* Status/content/notification layout adapted from the MIT-licensed display
- * reference identified in assets/licenses/LVGL_VIEW_LICENSE.txt.
- * BK7259 adaptation: product-owned display task, copied SSID input and
- * proportional card layout for the 640x480 logical Robot R2 display. */
+/* Pixel-glasses geometry and process-skin colors follow the product simulator's
+ * src/expressions.js and src/reference-style.js. The renderer owns only LVGL
+ * objects; the BK7259 display owner retains the panel and its fixed buffers. */
 #include "lvgl_view.h"
-#include "lvgl_assets.h"
+#include "pixel_expression_shapes.h"
 
 #include <cstring>
 
 LV_FONT_DECLARE(mybot_lvgl_font_20);
 LV_FONT_DECLARE(lv_font_montserrat_32);
+LV_FONT_DECLARE(bk7259_terminal_font_15);
+LV_FONT_DECLARE(bk7259_terminal_font_16);
 
 namespace {
 
-constexpr uint32_t kTimerPeriodMs = 100;
-constexpr uint32_t kNotificationMs = 2000;
+constexpr int kArtworkWidth = 1024;
+constexpr int kArtworkHeight = 896;
+constexpr unsigned kFrameParts = 13;
 constexpr size_t kSsidCapacity = 33;
-
-/* Logical pixels on the Robot V2 panel. Keep text inside the rounded bezel;
- * the middle of the screen can use more width than the top and bottom. */
-constexpr int kHeaderInsetX = 40;
-constexpr int kHeaderInsetY = 14;
-constexpr int kHeaderHeight = 30;
-constexpr int kCardInsetX = 16;
-constexpr int kFooterInsetX = 32;
-constexpr int kFooterInsetY = 18;
-constexpr int kFooterHeight = 34;
-
-struct Theme {
-    uint32_t background;
-    uint32_t surface;
-    uint32_t border;
-    uint32_t text;
-    uint32_t muted;
-    uint32_t blue;
-    uint32_t green;
-    uint32_t amber;
-    uint32_t red;
-};
-
-#if CONFIG_MYBOT_LVGL_UI_LIGHT_THEME
-constexpr Theme kTheme{0xeff3f8, 0xffffff, 0xdce4ee, 0x172637, 0x566477,
-                       0x1766ae, 0x177849, 0x8b5000, 0xbc3542};
-#else
-constexpr Theme kTheme{0x0e1520, 0x192433, 0x2a3b50, 0xedf2fa, 0xa5b2c7,
-                       0x69b5ff, 0x69dba8, 0xffcc7c, 0xff8e91};
-#endif
+constexpr uint32_t kTransitionMs = 250;
+constexpr uint32_t kTransitionTickMs = 50;
+constexpr uint32_t kCursorMs = 500;
+constexpr uint32_t kBackground = 0x050708;
+constexpr uint32_t kNeutral = 0xf1f1ee;
+constexpr uint32_t kGreeting = 0xf1ca79;
+constexpr uint32_t kTerminal = 0x639589;
+constexpr uint32_t kMuted = 0xa0a6a3;
+constexpr uint32_t kError = 0xe57876;
 
 struct Presentation {
     const char *title;
-    const char *status;
     const char *notice;
-    const char *icon;
-    uint32_t accent;
+    uint32_t ink;
 };
 
 #if CONFIG_MYBOT_LANGUAGE_ZH_CN
 constexpr Presentation kScreens[] = {
-    {"启动中", "启动", "正在初始化", LV_SYMBOL_POWER, kTheme.blue},
-    {"Wi-Fi 配网", "配网", "请连接设备热点", LV_SYMBOL_WIFI, kTheme.amber},
-    {"网络已断开", "离线", "正在重新连接", LV_SYMBOL_WIFI, kTheme.red},
-    {"连接服务中", "连接", "正在连接服务", LV_SYMBOL_REFRESH, kTheme.blue},
-    {"等待配对", "配对", "正在获取配对码", LV_SYMBOL_SETTINGS, kTheme.amber},
-    {"配对码", "配对", "在网页控制台输入配对码", LV_SYMBOL_SETTINGS, kTheme.amber},
-    {"准备就绪", "就绪", "开始对话", LV_SYMBOL_OK, kTheme.green},
-    {"对话中", "对话", "声纹注册中", LV_SYMBOL_CALL, kTheme.blue},
-    {"启动失败", "异常", "请重启后重试", LV_SYMBOL_WARNING, kTheme.red},
-    {"正在退出", "退出", "正在结束服务", LV_SYMBOL_POWER, kTheme.muted},
+    {"启动中", "正在初始化", kNeutral},
+    {"Wi-Fi 配网", "请连接设备热点", kGreeting},
+    {"网络已断开", "正在重新连接", kError},
+    {"连接服务中", "正在连接服务", kNeutral},
+    {"等待配对", "正在获取配对码", kGreeting},
+    {"配对码", "在网页控制台输入配对码", kGreeting},
+    {"", "", kNeutral},
+    {"", "", kGreeting},
+    {"启动失败", "请重启后重试", kError},
+    {"正在退出", "正在结束服务", kMuted},
 };
-constexpr const char *kListening = "聆听中";
-constexpr const char *kThinking = "思考中";
-constexpr const char *kSpeaking = "正在回复";
-constexpr const char *kVoiceprintSaved = "声纹已注册";
-constexpr const char *kPairedNotification = "配对成功";
-constexpr const char *kVoiceprintNotification = "声纹注册成功";
-constexpr const char *kNetworkNotification = "网络已恢复";
-constexpr const char *kResetStatus = "恢复出厂";
 constexpr Presentation kResetScreens[] = {
-    {"正在恢复出厂设置", kResetStatus, "请勿断电", LV_SYMBOL_REFRESH, kTheme.amber},
-    {"恢复失败，\n请长按重试", kResetStatus, "长按5秒重试", LV_SYMBOL_WARNING, kTheme.red},
-    {"恢复完成，正在重启", kResetStatus, "请勿断电", LV_SYMBOL_POWER, kTheme.green},
+    {"正在恢复出厂设置", "请勿断电", kGreeting},
+    {"恢复失败，\n请长按重试", "长按5秒重试", kError},
+    {"恢复完成，正在重启", "请勿断电", kNeutral},
 };
+constexpr const char *kPortalNotice = "请连接设备热点\nhttp://192.168.4.1";
 #else
 constexpr Presentation kScreens[] = {
-    {"Starting", "Starting", "Please wait", LV_SYMBOL_POWER, kTheme.blue},
-    {"Wi-Fi setup", "Setup", "Connect to device Wi-Fi", LV_SYMBOL_WIFI, kTheme.amber},
-    {"Wi-Fi disconnected", "Offline", "Reconnecting to Wi-Fi", LV_SYMBOL_WIFI, kTheme.red},
-    {"Connecting", "Connecting", "Connecting to services", LV_SYMBOL_REFRESH, kTheme.blue},
-    {"Pairing", "Pairing", "Getting pairing code", LV_SYMBOL_SETTINGS, kTheme.amber},
-    {"Pairing code", "Pairing", "Enter code in web console", LV_SYMBOL_SETTINGS, kTheme.amber},
-    {"Ready", "Ready", "Press to start", LV_SYMBOL_OK, kTheme.green},
-    {"In conversation", "Talking", "VP registering", LV_SYMBOL_CALL, kTheme.blue},
-    {"Startup failed", "Error", "Restart to retry", LV_SYMBOL_WARNING, kTheme.red},
-    {"Stopping", "Stopping", "Closing services", LV_SYMBOL_POWER, kTheme.muted},
+    {"Starting", "Please wait", kNeutral},
+    {"Wi-Fi setup", "Connect to device Wi-Fi", kGreeting},
+    {"Wi-Fi disconnected", "Reconnecting to Wi-Fi", kError},
+    {"Connecting", "Connecting to services", kNeutral},
+    {"Pairing", "Getting pairing code", kGreeting},
+    {"Pairing code", "Enter code in web console", kGreeting},
+    {"", "", kNeutral},
+    {"", "", kGreeting},
+    {"Startup failed", "Restart to retry", kError},
+    {"Stopping", "Closing services", kMuted},
 };
-constexpr const char *kListening = "Listening";
-constexpr const char *kThinking = "Thinking";
-constexpr const char *kSpeaking = "Speaking";
-constexpr const char *kVoiceprintSaved = "VP registered";
-constexpr const char *kPairedNotification = "Paired successfully";
-constexpr const char *kVoiceprintNotification = "Voiceprint registered";
-constexpr const char *kNetworkNotification = "Wi-Fi reconnected";
-constexpr const char *kResetStatus = "Factory reset";
 constexpr Presentation kResetScreens[] = {
-    {"Restoring factory settings", kResetStatus, "Keep power connected", LV_SYMBOL_REFRESH,
-     kTheme.amber},
-    {"Reset failed.\nHold 5s to retry", kResetStatus, "Hold 5s to retry", LV_SYMBOL_WARNING,
-     kTheme.red},
-    {"Reset complete. Restarting", kResetStatus, "Keep power connected", LV_SYMBOL_POWER,
-     kTheme.green},
+    {"Restoring factory settings", "Keep power connected", kGreeting},
+    {"Reset failed.\nHold 5s to retry", "Hold 5s to retry", kError},
+    {"Reset complete. Restarting", "Keep power connected", kNeutral},
 };
+constexpr const char *kPortalNotice = "Connect to device Wi-Fi\nhttp://192.168.4.1";
 #endif
 
 static_assert(sizeof(kScreens) / sizeof(kScreens[0]) == MYBOT_LCD_SCREEN_COUNT,
               "Every SDK workflow screen needs a presentation");
 
-enum class Activity {
-    None,
-    Listening,
-    Thinking,
-    Speaking,
-};
-
-enum class Notification {
-    None,
-    Pairing,
-    Voiceprint,
-    Network,
-};
-
 struct View {
     lv_obj_t *root;
-    lv_obj_t *brand;
-    lv_obj_t *status;
-    lv_obj_t *notification;
-    lv_obj_t *card;
-    lv_obj_t *badge;
-    lv_obj_t *icon;
-    lv_obj_t *emoji;
+    lv_obj_t *artwork;
+    lv_obj_t *cursor;
+    lv_obj_t *signature;
+    lv_obj_t *actor;
+    lv_obj_t *terminal[4];
+    lv_obj_t *face;
+    lv_obj_t *frame[kFrameParts];
+    pixel_shapes::Bank banks[2];
+    lv_obj_t *guide;
+    lv_obj_t *divider;
     lv_obj_t *title;
     lv_obj_t *code;
+    lv_obj_t *detail;
     lv_obj_t *notice;
-    lv_obj_t *activity;
-    lv_obj_t *bars[5];
     lv_timer_t *timer;
-    const lv_image_dsc_t *emoji_source;
     mybot_lcd_content_t previous;
     char provisioning_ssid[kSsidCapacity];
     char pair_code[MYBOT_LCD_PAIR_CODE_CAPACITY];
+    char mood[32];
+    int artwork_width;
+    int artwork_height;
     bool has_content;
-    bool notification_visible;
-    bool vp_notification_shown;
-    Notification notification_kind;
-    uint32_t notification_started;
-    uint32_t accent;
-    uint32_t notice_color;
-    Activity activity_mode;
-    unsigned animation_frame;
-    int content_y;
+    bool face_visible;
+    bool transitioning;
+    bool factory_reset;
+    uint32_t transition_started;
+    uint32_t current_ink;
+    uint32_t current_terminal;
+    bk7259_expression_t expression;
+    unsigned active_bank;
+    bool previous_face;
 };
 
 View s_view{};
 
-lv_obj_t *make_panel(lv_obj_t *parent, int x, int y, int width, int height, uint32_t color) {
-    lv_obj_t *panel = lv_obj_create(parent);
-    if (!panel) {
-        return nullptr;
-    }
-    lv_obj_remove_style_all(panel);
-    lv_obj_remove_flag(panel,
-                       static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
-    lv_obj_set_pos(panel, x, y);
-    lv_obj_set_size(panel, width, height);
-    lv_obj_set_style_bg_color(panel, lv_color_hex(color), 0);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
-    return panel;
-}
+int scale(int value) { return (value * s_view.artwork_width + kArtworkWidth / 2) / kArtworkWidth; }
 
-lv_obj_t *make_label(lv_obj_t *parent, int x, int y, int width, int height) {
-    lv_obj_t *label = lv_label_create(parent);
-    if (!label) {
-        return nullptr;
-    }
-    lv_obj_remove_style_all(label);
-    lv_obj_set_pos(label, x, y);
-    lv_obj_set_size(label, width, height);
-    lv_obj_set_style_text_font(label, &mybot_lvgl_font_20, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(kTheme.text), 0);
-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
-    lv_label_set_text_static(label, "");
-    return label;
-}
-
-void set_text(lv_obj_t *label, const char *text) {
-    if (lv_label_get_text(label) != text) {
-        /* All callers pass firmware literals. Dynamic SSID/code labels use
-         * their own fixed View storage and are refreshed explicitly below. */
-        lv_label_set_text_static(label, text);
-    }
+int positive_scale(int value) {
+    const int result = scale(value);
+    return result > 0 ? result : 1;
 }
 
 void set_hidden(lv_obj_t *object, bool hidden) {
@@ -213,134 +133,313 @@ void set_hidden(lv_obj_t *object, bool hidden) {
     }
 }
 
-uint32_t conversation_indicators(uint32_t indicators) {
-    uint32_t state = 0;
-    if (indicators & MYBOT_LCD_INDICATOR_LISTENING) {
-        state = MYBOT_LCD_INDICATOR_LISTENING;
-    } else if (indicators & MYBOT_LCD_INDICATOR_THINKING) {
-        state = MYBOT_LCD_INDICATOR_THINKING;
-    } else if (indicators & MYBOT_LCD_INDICATOR_SPEAKING) {
-        state = MYBOT_LCD_INDICATOR_SPEAKING;
+void set_text(lv_obj_t *label, const char *text) {
+    if (lv_label_get_text(label) != text) {
+        lv_label_set_text_static(label, text);
     }
-    return state | (indicators & MYBOT_LCD_INDICATOR_VP_REGISTERED);
 }
 
-void clear_notification() {
-    if (!s_view.notification_visible) {
-        return;
+void prepare_object(lv_obj_t *object, int x, int y, int width, int height) {
+    lv_obj_remove_style_all(object);
+    lv_obj_remove_flag(object,
+                       static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
+    lv_obj_set_pos(object, x, y);
+    lv_obj_set_size(object, width, height);
+}
+
+lv_obj_t *make_panel(lv_obj_t *parent, int x, int y, int width, int height, uint32_t ink,
+                     lv_opa_t opacity = LV_OPA_COVER) {
+    lv_obj_t *object = lv_obj_create(parent);
+    if (object) {
+        prepare_object(object, x, y, width, height);
+        lv_obj_set_style_bg_color(object, lv_color_hex(ink), 0);
+        lv_obj_set_style_bg_opa(object, opacity, 0);
     }
-    s_view.notification_visible = false;
-    s_view.notification_kind = Notification::None;
-    set_hidden(s_view.notification, true);
-    set_hidden(s_view.brand, false);
-    set_hidden(s_view.status, false);
+    return object;
 }
 
-void show_notification(Notification kind, const char *text, uint32_t color) {
-    set_text(s_view.notification, text);
-    lv_obj_set_style_text_color(s_view.notification, lv_color_hex(color), 0);
-    s_view.notification_visible = true;
-    s_view.notification_kind = kind;
-    s_view.notification_started = lv_tick_get();
-    set_hidden(s_view.brand, true);
-    set_hidden(s_view.status, true);
-    set_hidden(s_view.notification, false);
+lv_obj_t *make_artwork_panel(lv_obj_t *parent, int x, int y, int width, int height, uint32_t ink,
+                             lv_opa_t opacity = LV_OPA_COVER) {
+    return make_panel(parent, scale(x), scale(y), positive_scale(width), positive_scale(height),
+                      ink, opacity);
 }
 
-/* These bars express an activity state, not measured microphone amplitude.
- * All objects and their style properties exist before the first timer tick. */
-void draw_activity_frame() {
-    constexpr uint8_t heights[][5] = {
-        {4, 8, 14, 8, 4},   {6, 12, 8, 14, 6}, {10, 6, 12, 6, 10},
-        {14, 8, 4, 10, 14}, {8, 14, 10, 4, 8}, {6, 10, 14, 10, 6},
-    };
-    unsigned phase = s_view.animation_frame;
-    for (unsigned i = 0; i < 5; ++i) {
-        const bool thinking = s_view.activity_mode == Activity::Thinking;
-        if (thinking) {
-            set_hidden(s_view.bars[i], i >= 3);
-            if (i >= 3) {
-                continue;
-            }
-            lv_obj_set_pos(s_view.bars[i], 10 + static_cast<int>(i) * 17, 5);
-            lv_obj_set_size(s_view.bars[i], 6, 6);
-            lv_obj_set_style_bg_opa(s_view.bars[i], i == phase % 3 ? LV_OPA_COVER : LV_OPA_30, 0);
-        } else {
-            set_hidden(s_view.bars[i], false);
-            const unsigned column = s_view.activity_mode == Activity::Speaking ? 4 - i : i;
-            const int height = heights[phase % 6][column];
-            lv_obj_set_pos(s_view.bars[i], 7 + static_cast<int>(i) * 11, (16 - height) / 2);
-            lv_obj_set_size(s_view.bars[i], 6, height);
-            lv_obj_set_style_bg_opa(s_view.bars[i], LV_OPA_COVER, 0);
+lv_obj_t *make_label(lv_obj_t *parent, int x, int y, int width, int height, const lv_font_t *font,
+                     uint32_t ink) {
+    lv_obj_t *object = lv_label_create(parent);
+    if (object) {
+        int label_height = positive_scale(height);
+        if (label_height < font->line_height) {
+            label_height = font->line_height;
         }
+        prepare_object(object, scale(x), scale(y), positive_scale(width), label_height);
+        lv_obj_set_style_text_font(object, font, 0);
+        lv_obj_set_style_text_color(object, lv_color_hex(ink), 0);
+        lv_obj_set_style_text_align(object, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(object, LV_LABEL_LONG_WRAP);
+        lv_label_set_text_static(object, "");
+    }
+    return object;
+}
+
+uint32_t blend_color(uint32_t from, uint32_t to, unsigned progress) {
+    uint32_t result = 0;
+    for (unsigned shift = 0; shift < 24; shift += 8) {
+        const unsigned channel = (((from >> shift) & 255u) * (255u - progress) +
+                                  ((to >> shift) & 255u) * progress + 127u) /
+                                 255u;
+        result |= channel << shift;
+    }
+    return result;
+}
+
+void paint_frame(uint32_t ink, uint32_t terminal) {
+    const lv_color_t color = lv_color_hex(ink);
+    if (ink != s_view.current_ink) {
+        for (auto *part : s_view.frame) {
+            lv_obj_set_style_bg_color(part, color, 0);
+        }
+        lv_obj_set_style_bg_color(s_view.cursor, color, 0);
+        lv_obj_set_style_text_color(s_view.signature, color, 0);
+        s_view.current_ink = ink;
+    }
+    if (terminal != s_view.current_terminal) {
+        for (auto *label : s_view.terminal) {
+            lv_obj_set_style_text_color(label, lv_color_hex(terminal), 0);
+        }
+        s_view.current_terminal = terminal;
     }
 }
 
-bool animation_running() {
+void update_terminal(bk7259_expression_t expression) {
+    const char *name = bk7259_expression_name(expression);
+    constexpr char prefix[] = "> mood: ";
+    std::memcpy(s_view.mood, prefix, sizeof(prefix) - 1);
+    unsigned out = sizeof(prefix) - 1;
+    while (*name && out < sizeof(s_view.mood) - 1) {
+        const char letter = *name++;
+        s_view.mood[out++] = letter >= 'A' && letter <= 'Z' ? letter + 'a' - 'A' : letter;
+    }
+    s_view.mood[out] = '\0';
+    /* The owned buffer address is stable; explicitly refresh its changed bytes. */
+    lv_label_set_text_static(s_view.terminal[1], s_view.mood);
+    set_text(s_view.terminal[2],
+             expression == BK7259_EXPRESSION_SLEEP ? "> state: standby" : "> state: online");
+}
+
+void render_expression(uint32_t now) {
+    unsigned progress = 255;
 #if CONFIG_MYBOT_LVGL_UI_ANIMATIONS
-    return s_view.activity_mode != Activity::None;
-#else
-    return false;
+    if (s_view.transitioning) {
+        const uint32_t elapsed = now - s_view.transition_started;
+        progress = elapsed >= kTransitionMs ? 255u : elapsed * 255u / kTransitionMs;
+    }
 #endif
+    auto &current = s_view.banks[s_view.active_bank];
+    const auto &config = pixel_shapes::kConfigs[s_view.expression];
+    const unsigned brightness =
+        pixel_shapes::brightness(s_view.expression, now, s_view.transition_started);
+    unsigned alpha = progress * brightness / 1000u;
+    if (alpha > 255)
+        alpha = 255;
+    pixel_shapes::paint(current, now, static_cast<uint8_t>(alpha), brightness,
+                        static_cast<uint8_t>(progress));
+    const unsigned shade = brightness > 1000 ? 255 : brightness * 255u / 1000u;
+    const uint32_t target_ink = blend_color(kBackground, config.ink, shade);
+    const uint32_t target_terminal = blend_color(kBackground, kTerminal, shade);
+    uint32_t old_ink = kBackground, old_terminal = kBackground;
+    auto &previous = s_view.banks[1 - s_view.active_bank];
+    if (progress < 255 && s_view.previous_face) {
+        const unsigned previous_brightness =
+            pixel_shapes::brightness(previous.expression, now, previous.changed_at);
+        unsigned previous_alpha = (255u - progress) * previous_brightness / 1000u;
+        if (previous_alpha > 255)
+            previous_alpha = 255;
+        pixel_shapes::paint(previous, now, static_cast<uint8_t>(previous_alpha),
+                            previous_brightness, static_cast<uint8_t>(255u - progress));
+        const unsigned previous_shade =
+            previous_brightness > 1000 ? 255 : previous_brightness * 255u / 1000u;
+        old_ink = blend_color(kBackground, pixel_shapes::kConfigs[previous.expression].ink,
+                              previous_shade);
+        old_terminal = blend_color(kBackground, kTerminal, previous_shade);
+    }
+    paint_frame(blend_color(old_ink, target_ink, progress),
+                blend_color(old_terminal, target_terminal, progress));
+    if (progress == 255) {
+        s_view.transitioning = false;
+        set_hidden(previous.root, true);
+    }
 }
 
 void update_timer() {
-    const bool needed = s_view.notification_visible || animation_running();
-    if (needed && lv_timer_get_paused(s_view.timer)) {
+#if CONFIG_MYBOT_LVGL_UI_ANIMATIONS
+    if (s_view.factory_reset || !s_view.face_visible) {
+        lv_timer_pause(s_view.timer);
+        return;
+    }
+    const uint32_t now = lv_tick_get();
+    const bool flash = (pixel_shapes::kConfigs[s_view.expression].motion & pixel_shapes::Flash) &&
+                       (uint32_t)(now - s_view.transition_started) < 90;
+    const uint32_t period =
+        s_view.transitioning || pixel_shapes::animated(s_view.expression) || flash
+            ? kTransitionTickMs
+            : kCursorMs - now % kCursorMs;
+    lv_timer_set_period(s_view.timer, period);
+    if (lv_timer_get_paused(s_view.timer)) {
         lv_timer_reset(s_view.timer);
         lv_timer_resume(s_view.timer);
-    } else if (!needed && !lv_timer_get_paused(s_view.timer)) {
-        lv_timer_pause(s_view.timer);
     }
+#else
+    lv_timer_pause(s_view.timer);
+#endif
 }
 
 void timer_callback(lv_timer_t *) {
-    if (s_view.notification_visible &&
-        lv_tick_elaps(s_view.notification_started) >= kNotificationMs) {
-        clear_notification();
-    }
-    if (animation_running()) {
-        s_view.animation_frame = (s_view.animation_frame + 1) % 6;
-        draw_activity_frame();
-    }
+#if CONFIG_MYBOT_LVGL_UI_ANIMATIONS
+    const uint32_t now = lv_tick_get();
+    if (s_view.transitioning || pixel_shapes::animated(s_view.expression))
+        render_expression(now);
+    set_hidden(s_view.cursor, (now / kCursorMs) % 2 != 0);
+#endif
     update_timer();
 }
 
-bool online_screen(mybot_lcd_screen_t screen) {
-    return screen == MYBOT_LCD_SCREEN_STARTING_SERVICES || screen == MYBOT_LCD_SCREEN_PAIRING ||
-           screen == MYBOT_LCD_SCREEN_PAIR_CODE || screen == MYBOT_LCD_SCREEN_READY ||
-           screen == MYBOT_LCD_SCREEN_IN_CONVERSATION;
+void show_face(bk7259_expression_t expression) {
+    const bool was_visible = s_view.face_visible;
+    set_hidden(s_view.guide, true);
+    set_hidden(s_view.face, false);
+    set_hidden(s_view.cursor, false);
+    s_view.face_visible = true;
+    s_view.previous_face = was_visible;
+    s_view.active_bank = 1 - s_view.active_bank;
+    auto &bank = s_view.banks[s_view.active_bank];
+    pixel_shapes::configure(bank, expression);
+    bank.changed_at = lv_tick_get();
+    s_view.expression = expression;
+    s_view.transition_started = bank.changed_at;
+    update_terminal(expression);
+    lv_obj_set_y(s_view.actor, scale(pixel_shapes::kConfigs[expression].offset_y));
+    set_hidden(bank.root, false);
+    /* Keep current shapes above previous shapes without a transform/layer. */
+    lv_obj_move_to_index(bank.root, -1);
+    set_hidden(s_view.banks[1 - s_view.active_bank].root, !was_visible);
+#if CONFIG_MYBOT_LVGL_UI_ANIMATIONS
+    s_view.transitioning = true;
+#else
+    s_view.transitioning = false;
+#endif
+    render_expression(lv_tick_get());
+    update_timer();
 }
 
-void update_notifications(const mybot_lcd_content_t &content) {
-    const bool conversation = content.screen == MYBOT_LCD_SCREEN_IN_CONVERSATION;
-    const bool screen_changed = !s_view.has_content || content.screen != s_view.previous.screen;
-    if (screen_changed) {
-        /* A workflow transition invalidates a toast from the previous screen. Speaking and
-         * listening updates stay within the same conversation and keep its toast's deadline. */
-        clear_notification();
-        if (!conversation || s_view.previous.screen != MYBOT_LCD_SCREEN_IN_CONVERSATION) {
-            s_view.vp_notification_shown = false;
+void show_guide(const Presentation &presentation) {
+    s_view.face_visible = false;
+    s_view.transitioning = false;
+    lv_obj_set_y(s_view.actor, 0);
+    update_terminal(BK7259_EXPRESSION_NEUTRAL);
+    set_hidden(s_view.face, true);
+    set_hidden(s_view.cursor, true);
+    set_hidden(s_view.guide, false);
+    set_hidden(s_view.code, true);
+    set_hidden(s_view.detail, true);
+    set_text(s_view.title, presentation.title);
+    set_text(s_view.notice, presentation.notice);
+    lv_obj_set_style_text_color(s_view.title, lv_color_hex(presentation.ink), 0);
+    lv_obj_set_style_text_color(s_view.signature, lv_color_hex(presentation.ink), 0);
+    lv_obj_set_style_bg_color(s_view.divider, lv_color_hex(presentation.ink), 0);
+    /* Guide chrome can change independently while the hidden face retains its
+     * old color. Force a complete primitive repaint when returning to a face. */
+    s_view.current_ink = 0xffffffffu;
+    for (auto *label : s_view.terminal) {
+        lv_obj_set_style_text_color(label, lv_color_hex(kTerminal), 0);
+    }
+    s_view.current_terminal = kTerminal;
+    update_timer();
+}
+
+bool create_face() {
+    s_view.face = make_panel(s_view.actor, 0, 0, s_view.artwork_width, s_view.artwork_height,
+                             kBackground, LV_OPA_TRANSP);
+    if (!s_view.face) {
+        return false;
+    }
+    unsigned part = 0;
+    for (unsigned eye = 0; eye < 2; ++eye) {
+        const int x = eye == 0 ? 214 : 534;
+        s_view.frame[part++] = make_artwork_panel(s_view.face, x + 16, 354, 245, 11, kNeutral);
+        s_view.frame[part++] = make_artwork_panel(s_view.face, x + 5, 365, 11, 204, kNeutral);
+        s_view.frame[part++] = make_artwork_panel(s_view.face, x + 261, 365, 11, 204, kNeutral);
+        s_view.frame[part++] = make_artwork_panel(s_view.face, x + 16, 569, 245, 11, kNeutral);
+        s_view.frame[part++] = make_artwork_panel(s_view.face, x + 28, 581, 220, 5, kNeutral);
+    }
+    s_view.frame[part++] = make_artwork_panel(s_view.face, 486, 392, 48, 12, kNeutral);
+    s_view.frame[part++] = make_artwork_panel(s_view.face, 204, 377, 12, 13, kNeutral);
+    s_view.frame[part++] = make_artwork_panel(s_view.face, 806, 377, 12, 13, kNeutral);
+    for (auto *object : s_view.frame) {
+        if (!object) {
+            return false;
         }
     }
-    if (s_view.notification_kind == Notification::Voiceprint &&
-        !(content.indicators & MYBOT_LCD_INDICATOR_VP_REGISTERED)) {
-        clear_notification();
+    for (auto &bank : s_view.banks) {
+        if (!pixel_shapes::create(bank, s_view.face, s_view.artwork_width, s_view.artwork_height))
+            return false;
     }
-    if (conversation && (content.indicators & MYBOT_LCD_INDICATOR_VP_REGISTERED) &&
-        !s_view.vp_notification_shown) {
-        s_view.vp_notification_shown = true;
-        show_notification(Notification::Voiceprint, kVoiceprintNotification, kTheme.green);
-    } else if (screen_changed && s_view.has_content &&
-               (s_view.previous.screen == MYBOT_LCD_SCREEN_PAIRING ||
-                s_view.previous.screen == MYBOT_LCD_SCREEN_PAIR_CODE) &&
-               (content.screen == MYBOT_LCD_SCREEN_READY || conversation)) {
-        show_notification(Notification::Pairing, kPairedNotification, kTheme.green);
-    } else if (screen_changed && s_view.has_content &&
-               s_view.previous.screen == MYBOT_LCD_SCREEN_WIFI_DISCONNECTED &&
-               online_screen(content.screen)) {
-        show_notification(Notification::Network, kNetworkNotification, kTheme.blue);
+    return true;
+}
+
+bool create_chrome() {
+    for (unsigned i = 0; i < 3; ++i) {
+        const int radius = i == 1 ? 19 : 13;
+        lv_obj_t *dot =
+            make_artwork_panel(s_view.artwork, 390 + static_cast<int>(i) * 122 - radius,
+                               90 - radius, radius * 2, radius * 2, i == 1 ? 0x151923 : 0x595d5f);
+        if (!dot) {
+            return false;
+        }
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
     }
+    s_view.actor = make_panel(s_view.artwork, 0, 0, s_view.artwork_width, s_view.artwork_height,
+                              kBackground, LV_OPA_TRANSP);
+    if (!s_view.actor)
+        return false;
+    for (unsigned line = 0; line < 4; ++line) {
+        s_view.terminal[line] = make_label(s_view.actor, 104, 108 + static_cast<int>(line) * 37,
+                                           650, 40, &bk7259_terminal_font_15, kTerminal);
+        if (!s_view.terminal[line])
+            return false;
+        lv_obj_set_style_text_align(s_view.terminal[line], LV_TEXT_ALIGN_LEFT, 0);
+    }
+    s_view.signature =
+        make_label(s_view.actor, 795, 112, 145, 40, &bk7259_terminal_font_16, kNeutral);
+    /* Place the terminal cursor from the actual fixed-width font advance. */
+    lv_point_t extent{};
+    lv_text_get_size(&extent, "> agora / realtime", &bk7259_terminal_font_15, 0, 0, LV_COORD_MAX,
+                     LV_TEXT_FLAG_NONE);
+    s_view.cursor = make_panel(s_view.actor, scale(104) + extent.x + scale(8), scale(219 + 9),
+                               positive_scale(13), positive_scale(24), kNeutral);
+    if (!s_view.signature || !s_view.cursor) {
+        return false;
+    }
+    lv_obj_set_style_text_align(s_view.signature, LV_TEXT_ALIGN_LEFT, 0);
+    lv_label_set_text_static(s_view.terminal[0], "> OIM / R2");
+    lv_label_set_text_static(s_view.terminal[3], "> agora / realtime");
+    update_terminal(BK7259_EXPRESSION_NEUTRAL);
+    lv_label_set_text_static(s_view.signature, "</>");
+    return true;
+}
+
+bool create_guide() {
+    s_view.guide = make_panel(s_view.artwork, 0, 0, s_view.artwork_width, s_view.artwork_height,
+                              kBackground, LV_OPA_TRANSP);
+    if (!s_view.guide) {
+        return false;
+    }
+    s_view.divider = make_artwork_panel(s_view.guide, 104, 292, 816, 2, kNeutral);
+    s_view.title = make_label(s_view.guide, 72, 350, 880, 116, &mybot_lvgl_font_20, kNeutral);
+    s_view.code = make_label(s_view.guide, 72, 478, 880, 92, &lv_font_montserrat_32, kGreeting);
+    s_view.detail = make_label(s_view.guide, 72, 478, 880, 130, &mybot_lvgl_font_20, kNeutral);
+    s_view.notice = make_label(s_view.guide, 72, 660, 880, 130, &mybot_lvgl_font_20, kMuted);
+    return s_view.divider && s_view.title && s_view.code && s_view.detail && s_view.notice;
 }
 
 } // namespace
@@ -354,235 +453,100 @@ int mybot_lvgl_view_create(lv_display_t *display) {
     if (width < 240 || height < 240) {
         return -1;
     }
-    const int header_width = width - kHeaderInsetX * 2;
-    const int card_width = width - kCardInsetX * 2;
-    const int card_x = kCardInsetX;
-    const int card_y = kHeaderInsetY + kHeaderHeight + 10;
-    const int footer_width = width - kFooterInsetX * 2;
-    const int footer_y = height - kFooterInsetY - kFooterHeight;
-    const int card_height = footer_y - card_y - 12;
-    const int center_x = (card_width - 64) / 2;
-    s_view.content_y = card_height > 138 ? (card_height - 138) / 2 : 0;
+    /* At 640x480 the source artwork scales uniformly by 9/16 to 576x504
+     * at (32, -12). Only unused top/bottom artwork space is clipped, so the
+     * glasses fill the R2 panel without moving text away from the source grid. */
+    s_view.artwork_width = width - 64;
+    s_view.artwork_height = s_view.artwork_width * kArtworkHeight / kArtworkWidth;
+    s_view.current_ink = kNeutral;
     s_view.root =
-        make_panel(lv_display_get_screen_active(display), 0, 0, width, height, kTheme.background);
+        make_panel(lv_display_get_screen_active(display), 0, 0, width, height, kBackground);
     if (!s_view.root) {
         mybot_lvgl_view_destroy();
         return -1;
     }
-    lv_obj_t *header = make_panel(s_view.root, kHeaderInsetX, kHeaderInsetY,
-                                 header_width, kHeaderHeight, kTheme.background);
-    lv_obj_t *footer = make_panel(s_view.root, kFooterInsetX, footer_y,
-                                 footer_width, kFooterHeight, kTheme.surface);
-    s_view.card = make_panel(s_view.root, card_x, card_y, card_width, card_height, kTheme.surface);
-    if (!header || !footer || !s_view.card) {
+    s_view.artwork = make_panel(s_view.root, (width - s_view.artwork_width) / 2,
+                                (height - s_view.artwork_height) / 2, s_view.artwork_width,
+                                s_view.artwork_height, kBackground, LV_OPA_TRANSP);
+    if (!s_view.artwork || !create_chrome() || !create_face() || !create_guide()) {
         mybot_lvgl_view_destroy();
         return -1;
     }
-    lv_obj_set_style_radius(s_view.card, 18, 0);
-    lv_obj_set_style_border_color(s_view.card, lv_color_hex(kTheme.border), 0);
-    lv_obj_set_style_border_width(s_view.card, 1, 0);
-    lv_obj_set_style_radius(footer, 12, 0);
-    s_view.badge = make_panel(s_view.card, center_x, s_view.content_y + 8, 64, 64, kTheme.surface);
-    s_view.activity = make_panel(s_view.card, center_x, card_height - 26, 64, 16, kTheme.surface);
-    if (!s_view.badge || !s_view.activity) {
-        mybot_lvgl_view_destroy();
-        return -1;
-    }
-    lv_obj_set_style_radius(s_view.badge, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(s_view.badge, 2, 0);
-    lv_obj_set_style_bg_opa(s_view.activity, LV_OPA_TRANSP, 0);
-
-    const int brand_width = header_width / 3;
-    s_view.brand = make_label(header, 0, 0, brand_width, kHeaderHeight);
-    s_view.status = make_label(header, brand_width, 0, header_width - brand_width, kHeaderHeight);
-    s_view.notification = make_label(header, 0, 0, header_width, kHeaderHeight);
-    s_view.icon = make_label(s_view.badge, 0, 0, 60, 40);
-    s_view.emoji = lv_image_create(s_view.card);
-    s_view.title = make_label(s_view.card, 4, s_view.content_y + 81, card_width - 8, 30);
-    s_view.code = make_label(s_view.card, 2, s_view.content_y + 63, card_width - 4, 45);
-    s_view.notice = make_label(footer, 4, 3, footer_width - 8, 28);
-    if (!s_view.brand || !s_view.status || !s_view.notification || !s_view.icon || !s_view.emoji ||
-        !s_view.title || !s_view.code || !s_view.notice) {
-        mybot_lvgl_view_destroy();
-        return -1;
-    }
-    lv_obj_set_pos(s_view.emoji, center_x, s_view.content_y + 8);
-    lv_obj_set_size(s_view.emoji, 64, 64);
-    lv_obj_set_style_text_align(s_view.brand, LV_TEXT_ALIGN_LEFT, 0);
-    lv_label_set_text_static(s_view.brand, "mybot");
-    lv_obj_set_style_text_align(s_view.status, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_style_text_color(s_view.status, lv_color_hex(kTheme.muted), 0);
-    lv_obj_set_style_text_color(s_view.notification, lv_color_hex(kTheme.green), 0);
-    set_hidden(s_view.notification, true);
-    lv_obj_set_style_text_font(s_view.icon, &lv_font_montserrat_32, 0);
-    lv_obj_center(s_view.icon);
-    lv_obj_set_style_text_letter_space(s_view.code, 0, 0);
-    lv_label_set_long_mode(s_view.code, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    for (unsigned i = 0; i < 5; ++i) {
-        s_view.bars[i] =
-            make_panel(s_view.activity, 7 + static_cast<int>(i) * 11, 4, 6, 8, kTheme.blue);
-        if (!s_view.bars[i]) {
-            mybot_lvgl_view_destroy();
-            return -1;
-        }
-        lv_obj_set_style_radius(s_view.bars[i], 3, 0);
-    }
-    s_view.timer = lv_timer_create(timer_callback, kTimerPeriodMs, nullptr);
+    s_view.timer = lv_timer_create(timer_callback, kTransitionTickMs, nullptr);
     if (!s_view.timer) {
         mybot_lvgl_view_destroy();
         return -1;
     }
     lv_timer_pause(s_view.timer);
-
     const mybot_lcd_content_t initial = {MYBOT_LCD_SCREEN_STARTING, {}, 0};
     mybot_lvgl_view_update(&initial, nullptr);
     return 0;
 }
 
 void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *ssid) {
-    if (!s_view.root || !content || content->screen < MYBOT_LCD_SCREEN_STARTING ||
-        content->screen >= MYBOT_LCD_SCREEN_COUNT) {
+    if (!s_view.root || !content || s_view.factory_reset ||
+        content->screen < MYBOT_LCD_SCREEN_STARTING || content->screen >= MYBOT_LCD_SCREEN_COUNT) {
         return;
     }
     mybot_lcd_content_t normalized{};
     normalized.screen = content->screen;
     const bool pairing_code = content->screen == MYBOT_LCD_SCREEN_PAIR_CODE;
-    const bool conversation = content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION;
     const bool provisioning = content->screen == MYBOT_LCD_SCREEN_WIFI_PROVISIONING;
-    char provisioning_ssid[kSsidCapacity]{};
-    if (provisioning && ssid) {
-        for (size_t i = 0; i < sizeof(provisioning_ssid) - 1 && ssid[i]; ++i) {
-            provisioning_ssid[i] = ssid[i];
-        }
-    }
     if (pairing_code) {
         std::memcpy(normalized.pair_code, content->pair_code, sizeof(normalized.pair_code) - 1);
     }
-    if (conversation) {
-        normalized.indicators = conversation_indicators(content->indicators);
+    char copied_ssid[kSsidCapacity]{};
+    if (provisioning && ssid) {
+        for (size_t i = 0; i < sizeof(copied_ssid) - 1 && ssid[i]; ++i) {
+            copied_ssid[i] = ssid[i];
+        }
     }
+    /* This product presents expressions instead of SDK indicator overlays.
+     * Repeated RTM voiceprint/listening/thinking/speaking updates must neither
+     * redraw the face nor restart its transition or cursor clock. */
     if (s_view.has_content && normalized.screen == s_view.previous.screen &&
-        normalized.indicators == s_view.previous.indicators &&
         std::strcmp(normalized.pair_code, s_view.previous.pair_code) == 0 &&
-        std::strcmp(provisioning_ssid, s_view.provisioning_ssid) == 0) {
+        std::strcmp(copied_ssid, s_view.provisioning_ssid) == 0) {
         return;
     }
-
-    Presentation presentation = kScreens[content->screen];
-    if (!s_view.has_content ||
-        provisioning != (s_view.previous.screen == MYBOT_LCD_SCREEN_WIFI_PROVISIONING) ||
-        pairing_code != (s_view.previous.screen == MYBOT_LCD_SCREEN_PAIR_CODE)) {
-        /* Scroll only when text overflows; restore clipping on exit. */
-        const auto mode = provisioning ? LV_LABEL_LONG_SCROLL_CIRCULAR : LV_LABEL_LONG_CLIP;
-        lv_label_set_long_mode(s_view.title, mode);
-        lv_label_set_long_mode(s_view.notice, provisioning || pairing_code
-                                                  ? LV_LABEL_LONG_SCROLL_CIRCULAR
-                                                  : LV_LABEL_LONG_CLIP);
-    }
-    uint32_t notice_color = kTheme.muted;
-    Activity activity = Activity::None;
-    auto emoji = MYBOT_UI_EMOJI_NEUTRAL;
-    const bool show_emoji = conversation || content->screen == MYBOT_LCD_SCREEN_READY;
-    if (content->screen == MYBOT_LCD_SCREEN_READY) {
-        emoji = MYBOT_UI_EMOJI_HAPPY;
-    }
-    if (conversation) {
-        if (normalized.indicators & MYBOT_LCD_INDICATOR_LISTENING) {
-            presentation.title = kListening;
-            presentation.accent = kTheme.green;
-            emoji = MYBOT_UI_EMOJI_RELAXED;
-            activity = Activity::Listening;
-        } else if (normalized.indicators & MYBOT_LCD_INDICATOR_THINKING) {
-            presentation.title = kThinking;
-            presentation.accent = kTheme.amber;
-            emoji = MYBOT_UI_EMOJI_THINKING;
-            activity = Activity::Thinking;
-        } else if (normalized.indicators & MYBOT_LCD_INDICATOR_SPEAKING) {
-            presentation.title = kSpeaking;
-            emoji = MYBOT_UI_EMOJI_HAPPY;
-            activity = Activity::Speaking;
-        }
-        const bool registered = normalized.indicators & MYBOT_LCD_INDICATOR_VP_REGISTERED;
-        if (registered) {
-            presentation.notice = kVoiceprintSaved;
-        }
-        notice_color = registered ? kTheme.green : kTheme.amber;
-    }
-    if (provisioning && provisioning_ssid[0]) {
-        std::memcpy(s_view.provisioning_ssid, provisioning_ssid, sizeof(s_view.provisioning_ssid));
-        lv_label_set_text_static(s_view.title, s_view.provisioning_ssid);
+    if (content->screen == MYBOT_LCD_SCREEN_READY ||
+        content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION) {
+        show_face(content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION ? BK7259_EXPRESSION_GREETING
+                                                                      : BK7259_EXPRESSION_NEUTRAL);
     } else {
-        set_text(s_view.title, presentation.title);
-    }
-    set_text(s_view.status, presentation.status);
-    set_text(s_view.icon, presentation.icon);
-    set_text(s_view.notice, presentation.notice);
-    if (!s_view.has_content || s_view.accent != presentation.accent) {
-        const lv_color_t accent = lv_color_hex(presentation.accent);
-        lv_obj_set_style_border_color(s_view.badge, accent, 0);
-        lv_obj_set_style_text_color(s_view.icon, accent, 0);
-        lv_obj_set_style_text_color(s_view.code, accent, 0);
-        for (auto *bar : s_view.bars) {
-            lv_obj_set_style_bg_color(bar, accent, 0);
+        show_guide(kScreens[content->screen]);
+        if (provisioning) {
+            std::memcpy(s_view.provisioning_ssid, copied_ssid, sizeof(s_view.provisioning_ssid));
+            lv_label_set_text_static(s_view.detail, s_view.provisioning_ssid);
+            set_text(s_view.notice, kPortalNotice);
+            set_hidden(s_view.detail, !copied_ssid[0]);
         }
-        s_view.accent = presentation.accent;
-    }
-    if (!s_view.has_content || s_view.notice_color != notice_color) {
-        lv_obj_set_style_text_color(s_view.notice, lv_color_hex(notice_color), 0);
-        s_view.notice_color = notice_color;
-    }
-    set_hidden(s_view.badge, pairing_code || show_emoji);
-    set_hidden(s_view.emoji, !show_emoji);
-    set_hidden(s_view.code, !pairing_code);
-    set_hidden(s_view.activity, activity == Activity::None);
-    if (show_emoji) {
-        const lv_image_dsc_t *source = mybot_lvgl_ui_emoji(emoji);
-        if (s_view.emoji_source != source) {
-            lv_image_set_src(s_view.emoji, source);
-            s_view.emoji_source = source;
+        if (pairing_code) {
+            lv_point_t extent{};
+            lv_text_get_size(&extent, normalized.pair_code, &lv_font_montserrat_32, 0, 0,
+                             LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            lv_obj_set_style_text_font(s_view.code,
+                                       extent.x <= lv_obj_get_width(s_view.code)
+                                           ? &lv_font_montserrat_32
+                                           : &mybot_lvgl_font_20,
+                                       0);
+            std::memcpy(s_view.pair_code, normalized.pair_code, sizeof(s_view.pair_code));
+            lv_label_set_text_static(s_view.code, s_view.pair_code);
+            set_hidden(s_view.code, false);
         }
     }
-    if (!s_view.has_content ||
-        pairing_code != (s_view.previous.screen == MYBOT_LCD_SCREEN_PAIR_CODE)) {
-        lv_obj_set_y(s_view.title, s_view.content_y + (pairing_code ? 20 : 81));
-    }
-    if (pairing_code && (!s_view.has_content || normalized.screen != s_view.previous.screen ||
-                         std::strcmp(normalized.pair_code, s_view.previous.pair_code) != 0)) {
-        lv_point_t extent{};
-        lv_text_get_size(&extent, normalized.pair_code, &lv_font_montserrat_32, 0, 0, LV_COORD_MAX,
-                         LV_TEXT_FLAG_NONE);
-        const int available = lv_obj_get_width(s_view.code);
-        const lv_font_t *font = &lv_font_montserrat_32;
-        if (extent.x > available) {
-            font = &mybot_lvgl_font_20;
-        }
-        lv_obj_set_style_text_font(s_view.code, font, 0);
-        std::memcpy(s_view.pair_code, normalized.pair_code, sizeof(s_view.pair_code));
-        lv_label_set_text_static(s_view.code, s_view.pair_code);
-    }
-    if (!s_view.has_content || s_view.activity_mode != activity) {
-        s_view.activity_mode = activity;
-        s_view.animation_frame = 0;
-        if (activity != Activity::None) {
-            draw_activity_frame();
-        }
-    }
-    update_notifications(normalized);
     s_view.previous = normalized;
-    std::memcpy(s_view.provisioning_ssid, provisioning_ssid, sizeof(s_view.provisioning_ssid));
+    std::memcpy(s_view.provisioning_ssid, copied_ssid, sizeof(s_view.provisioning_ssid));
     s_view.has_content = true;
-    update_timer();
 }
 
-void mybot_lvgl_view_destroy(void) {
-    /* The same LVGL owner serializes timer callbacks and destruction. */
-    if (s_view.timer) {
-        lv_timer_delete(s_view.timer);
-    }
-    if (s_view.root) {
-        lv_obj_delete(s_view.root);
-    }
-    s_view = View{};
+int bk7259_lvgl_view_show_expression(bk7259_expression_t expression) {
+    if (!s_view.root || !s_view.face_visible || s_view.factory_reset ||
+        expression < BK7259_EXPRESSION_NEUTRAL || expression >= BK7259_EXPRESSION_COUNT)
+        return -1;
+    if (expression != s_view.expression)
+        show_face(expression);
+    return 0;
 }
 
 void bk7259_lvgl_view_show_factory_reset(bk7259_factory_reset_screen_t screen) {
@@ -590,27 +554,17 @@ void bk7259_lvgl_view_show_factory_reset(bk7259_factory_reset_screen_t screen) {
         screen > BK7259_FACTORY_RESET_REBOOTING) {
         return;
     }
-    const Presentation &presentation = kResetScreens[screen];
-    clear_notification();
-    s_view.activity_mode = Activity::None;
-    s_view.has_content = false;
-    set_hidden(s_view.badge, false);
-    set_hidden(s_view.emoji, true);
-    set_hidden(s_view.code, true);
-    set_hidden(s_view.activity, true);
-    lv_label_set_long_mode(s_view.title, LV_LABEL_LONG_WRAP);
-    lv_obj_set_height(s_view.title, 60);
-    lv_obj_set_y(s_view.title, s_view.content_y + 81);
-    lv_label_set_long_mode(s_view.notice, LV_LABEL_LONG_CLIP);
-    set_text(s_view.title, presentation.title);
-    set_text(s_view.status, presentation.status);
-    set_text(s_view.icon, presentation.icon);
-    set_text(s_view.notice, presentation.notice);
-    const lv_color_t accent = lv_color_hex(presentation.accent);
-    lv_obj_set_style_border_color(s_view.badge, accent, 0);
-    lv_obj_set_style_text_color(s_view.icon, accent, 0);
-    lv_obj_set_style_text_color(s_view.notice, accent, 0);
-    s_view.accent = presentation.accent;
-    s_view.notice_color = presentation.accent;
-    update_timer();
+    s_view.factory_reset = true;
+    show_guide(kResetScreens[screen]);
+}
+
+void mybot_lvgl_view_destroy(void) {
+    /* The same display owner serializes timer callbacks and destruction. */
+    if (s_view.timer) {
+        lv_timer_delete(s_view.timer);
+    }
+    if (s_view.root) {
+        lv_obj_delete(s_view.root);
+    }
+    s_view = View{};
 }

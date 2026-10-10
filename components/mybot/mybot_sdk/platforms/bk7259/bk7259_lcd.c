@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "bk7259_ops.h"
+#include "bk7259_expression.h"
 #include "bk7259_factory_reset.h"
 #include "bk7259_platform_log.h"
 #include "display/lvgl_view.h"
@@ -82,6 +83,8 @@ typedef struct {
     bool pending;
     bool factory_reset_active;
     bk7259_factory_reset_screen_t factory_reset_screen;
+    bool expression_override;
+    bk7259_expression_t expression;
     mybot_lcd_content_t latest;
     char provisioning_ssid[LCD_SSID_CAPACITY];
 } lcd_context_t;
@@ -280,6 +283,17 @@ static void ui_worker(void *arg)
                     bk7259_lvgl_view_show_factory_reset(s_lcd.factory_reset_screen);
                 } else {
                     mybot_lvgl_view_update(&s_lcd.latest, s_lcd.provisioning_ssid);
+                    if (s_lcd.latest.screen == MYBOT_LCD_SCREEN_READY ||
+                        s_lcd.latest.screen == MYBOT_LCD_SCREEN_IN_CONVERSATION) {
+                        bk7259_expression_t expression = s_lcd.expression_override
+                            ? s_lcd.expression
+                            : (s_lcd.latest.screen == MYBOT_LCD_SCREEN_IN_CONVERSATION
+                                   ? BK7259_EXPRESSION_GREETING
+                                   : BK7259_EXPRESSION_NEUTRAL);
+                        if (bk7259_lvgl_view_show_expression(expression) < 0) {
+                            MYBOT_LOGW(TAG, "expression update rejected: %d", (int)expression);
+                        }
+                    }
                 }
                 s_lcd.pending = false;
             }
@@ -631,6 +645,8 @@ int bk7259_lcd_prepare(void)
     s_lcd.provisioning_ssid[0] = '\0';
     s_lcd.pending = false;
     s_lcd.factory_reset_active = false;
+    s_lcd.expression_override = false;
+    s_lcd.expression = BK7259_EXPRESSION_NEUTRAL;
     s_lcd.accepting = true;
     s_lcd.sdk_attached = false;
     /* No other LVGL calls after this transfer until worker_done. */
@@ -701,6 +717,11 @@ static int publish_content(const mybot_lcd_content_t *content)
     if (s_lcd.factory_reset_active) {
         return 0;
     }
+    if (s_lcd.latest.screen != content->screen ||
+        (content->screen != MYBOT_LCD_SCREEN_READY &&
+         content->screen != MYBOT_LCD_SCREEN_IN_CONVERSATION)) {
+        s_lcd.expression_override = false;
+    }
     s_lcd.latest = *content;
     s_lcd.pending = true;
     notify(&s_lcd.wake);
@@ -716,9 +737,60 @@ int bk7259_lcd_show_factory_reset(bk7259_factory_reset_screen_t screen)
     int ret = -1;
     if (s_lcd.prepared && s_lcd.accepting && !aosl_atomic_read(&s_lcd.stopping)) {
         s_lcd.factory_reset_active = true;
+        s_lcd.expression_override = false;
         s_lcd.factory_reset_screen = screen;
         s_lcd.pending = true;
         notify(&s_lcd.wake);
+        ret = 0;
+    }
+    unlock(&s_snapshot_lock);
+    return ret;
+}
+
+/* Caller holds the snapshot lock. Expressions never replace operating or
+ * recovery instructions, and a queued request has no borrowed payload. */
+static bool can_show_expression(void)
+{
+    return s_lcd.prepared && s_lcd.accepting && !s_lcd.factory_reset_active &&
+           !aosl_atomic_read(&s_lcd.stopping) &&
+           (s_lcd.latest.screen == MYBOT_LCD_SCREEN_READY ||
+            s_lcd.latest.screen == MYBOT_LCD_SCREEN_IN_CONVERSATION);
+}
+
+int bk7259_lcd_set_expression(bk7259_expression_t expression)
+{
+    const char *name = bk7259_expression_name(expression);
+    if (!name || !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
+        return -1;
+    }
+    int ret = -1;
+    if (can_show_expression()) {
+        if (!s_lcd.expression_override || s_lcd.expression != expression) {
+            s_lcd.expression_override = true;
+            s_lcd.expression = expression;
+            s_lcd.pending = true;
+            notify(&s_lcd.wake);
+            MYBOT_LOGI(TAG, "expression requested: %s", name);
+        }
+        ret = 0;
+    }
+    unlock(&s_snapshot_lock);
+    return ret;
+}
+
+int bk7259_lcd_clear_expression(void)
+{
+    if (!s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
+        return -1;
+    }
+    int ret = -1;
+    if (can_show_expression()) {
+        if (s_lcd.expression_override) {
+            s_lcd.expression_override = false;
+            s_lcd.pending = true;
+            notify(&s_lcd.wake);
+            MYBOT_LOGI(TAG, "expression override cleared");
+        }
         ret = 0;
     }
     unlock(&s_snapshot_lock);
