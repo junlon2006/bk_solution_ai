@@ -38,6 +38,8 @@
 #define LCD_UI_PRIORITY BEKEN_APPLICATION_PRIORITY
 #define LCD_SSID_CAPACITY 33
 #define LCD_POWER_GPIO GPIO_20
+/* GPIO29 enables the shared LCD/camera 2.8V rail. Keep it on from platform
+ * prepare until full shutdown; stopping video must only reset the sensor. */
 #define LCD_POWER_2V8_GPIO GPIO_29
 #define LCD_RESET_GPIO GPIO_42
 #define LCD_BACKLIGHT_GPIO GPIO_40

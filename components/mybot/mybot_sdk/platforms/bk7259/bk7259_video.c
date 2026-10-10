@@ -56,7 +56,6 @@
 #define VIDEO_STOP_WAIT_MS 3000U
 #define VIDEO_ENCODER_DRAIN_MS 80U
 #define VIDEO_CAMERA_RESET_ASSERT_MS 5U
-#define VIDEO_CAMERA_POWER_SETTLE_MS 20U
 #define VIDEO_FRAME_POOL_MAX 16U
 #define VIDEO_TASK_PRIORITY BEKEN_DEFAULT_WORKER_PRIORITY
 #define VIDEO_TASK_STACK_SIZE (8U * 1024U)
@@ -67,7 +66,6 @@
 #define VIDEO_CAM_RESET GPIO_30
 #define VIDEO_CAM_XCLK GPIO_59
 #define VIDEO_CAM_I2C_ID 0
-#define VIDEO_CAM_POWER GPIO_29
 
 typedef struct {
     beken_mutex_t lock;
@@ -83,7 +81,7 @@ typedef struct {
     bool stopping;
     bool camera_opened;
     bool camera_open_attempted;
-    bool camera_powered;
+    bool camera_reset_pending;
 } bk7259_video_context_t;
 
 static void video_task(void *arg);
@@ -108,39 +106,6 @@ static int video_camera_reset_set(bool asserted)
     if (ret != BK_OK) {
         MYBOT_LOGE(TAG, "camera reset GPIO level failed: %d", ret);
         return -1;
-    }
-    return 0;
-}
-
-static int video_camera_power_set(bool enabled)
-{
-    bk_err_t ret;
-
-    ret = gpio_dev_unmap(VIDEO_CAM_POWER);
-    if (ret != BK_OK) {
-        MYBOT_LOGE(TAG, "camera power GPIO unmap failed: %d", ret);
-        return -1;
-    }
-    ret = bk_gpio_enable_output(VIDEO_CAM_POWER);
-    if (ret != BK_OK) {
-        MYBOT_LOGE(TAG, "camera power GPIO output failed: %d", ret);
-        return -1;
-    }
-    ret = bk_gpio_pull_up(VIDEO_CAM_POWER);
-    if (ret != BK_OK) {
-        MYBOT_LOGE(TAG, "camera power GPIO pull-up failed: %d", ret);
-        return -1;
-    }
-    ret = enabled ? bk_gpio_set_output_high(VIDEO_CAM_POWER)
-                  : bk_gpio_set_output_low(VIDEO_CAM_POWER);
-    if (ret != BK_OK) {
-        MYBOT_LOGE(TAG, "camera power GPIO level failed: %d", ret);
-        return -1;
-    }
-    if (enabled) {
-        /* The robot board's GPIO32 rail can be switched at runtime.  Give the
-         * sensor's analog and digital rails time to settle before I2C detect. */
-        rtos_delay_milliseconds(VIDEO_CAMERA_POWER_SETTLE_MS);
     }
     return 0;
 }
@@ -187,18 +152,17 @@ static int video_camera_open(bk7259_video_context_t *ctx)
     void *encoder;
     int ret;
 
-    /* Hold the sensor in reset while the runtime-controlled camera rail and
-     * CSI clock are brought up.  The sensor driver's detect callback releases
+    /* GPIO29 supplies both LCD and camera; the display owner holds that rail
+     * from platform prepare through shutdown. Hold the sensor in reset while
+     * the camera-specific AuxLDOs and CSI clock are brought up.
+     * The sensor driver's detect callback releases
      * reset after the bus is enabled, producing a deterministic low-to-high
      * edge even after a previous failed start. */
     if (video_camera_reset_set(true) < 0) {
         return -1;
     }
+    ctx->camera_reset_pending = true;
     rtos_delay_milliseconds(VIDEO_CAMERA_RESET_ASSERT_MS);
-    if (video_camera_power_set(true) < 0) {
-        return -1;
-    }
-    ctx->camera_powered = true;
 
     config.mipi.enable = true;
     config.mipi.pin_scl = VIDEO_CAM_SCL;
@@ -299,14 +263,11 @@ static int video_camera_close(bk7259_video_context_t *ctx)
         MYBOT_LOGE(TAG, "MIPI camera close failed");
         result = -1;
     }
-    if (ctx->camera_powered) {
+    if (ctx->camera_reset_pending) {
         if (video_camera_reset_set(true) < 0) {
             result = -1;
-        }
-        if (video_camera_power_set(false) < 0) {
-            result = -1;
         } else {
-            ctx->camera_powered = false;
+            ctx->camera_reset_pending = false;
         }
     }
     /* app_h264e_turn_off() releases the producer side.  Release the MyBot
@@ -335,6 +296,9 @@ static int video_camera_close(bk7259_video_context_t *ctx)
     ctx->width = 0;
     ctx->height = 0;
     ctx->target_bps = 0;
+    if (result == 0) {
+        MYBOT_LOGI(TAG, "video stopped: sensor reset asserted; shared LCD/camera 2.8V rail retained");
+    }
     return result;
 }
 
@@ -479,7 +443,7 @@ static int video_stop(void *opaque)
     }
     rtos_lock_mutex(&ctx->lock);
     if (!ctx->running && ctx->task == NULL && !ctx->camera_opened &&
-        !ctx->camera_powered) {
+        !ctx->camera_reset_pending) {
         ctx->stopping = false;
         rtos_unlock_mutex(&ctx->lock);
         return 0;
@@ -550,7 +514,8 @@ static void video_destroy(void *opaque)
     if (ctx == NULL) {
         return;
     }
-    if (ctx->task != NULL || ctx->running || ctx->camera_opened) {
+    if (ctx->task != NULL || ctx->running || ctx->camera_opened ||
+        ctx->camera_reset_pending) {
         MYBOT_LOGE(TAG, "destroy called before video stop; retaining resources");
         return;
     }
