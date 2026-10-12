@@ -2,6 +2,7 @@
 #include "bk7259_ops.h"
 #include "bk7259_expression.h"
 #include "bk7259_factory_reset.h"
+#include "bk7259_lcd.h"
 #include "bk7259_platform_log.h"
 #include "display/lvgl_view.h"
 
@@ -90,6 +91,7 @@ typedef struct {
     bool expression_override;
     bk7259_expression_t expression;
     mybot_lcd_content_t latest;
+    bk7259_lcd_runtime_status_t runtime_status;
     char provisioning_ssid[LCD_SSID_CAPACITY];
 } lcd_context_t;
 
@@ -286,7 +288,8 @@ static void ui_worker(void *arg)
                 if (s_lcd.factory_reset_active) {
                     bk7259_lvgl_view_show_factory_reset(s_lcd.factory_reset_screen);
                 } else {
-                    mybot_lvgl_view_update(&s_lcd.latest, s_lcd.provisioning_ssid);
+                    mybot_lvgl_view_update(&s_lcd.latest, s_lcd.provisioning_ssid,
+                                           &s_lcd.runtime_status);
                     if (s_lcd.latest.screen == MYBOT_LCD_SCREEN_READY ||
                         s_lcd.latest.screen == MYBOT_LCD_SCREEN_IN_CONVERSATION) {
                         bk7259_expression_t expression = s_lcd.expression_override
@@ -670,6 +673,7 @@ int bk7259_lcd_prepare(void)
         goto failed;
     }
     s_lcd.latest = (mybot_lcd_content_t){.screen = MYBOT_LCD_SCREEN_STARTING};
+    s_lcd.runtime_status = (bk7259_lcd_runtime_status_t){.state = "stopped"};
     s_lcd.provisioning_ssid[0] = '\0';
     s_lcd.pending = false;
     s_lcd.factory_reset_active = false;
@@ -837,6 +841,29 @@ int bk7259_lcd_show_screen(mybot_lcd_screen_t screen)
     return ret;
 }
 
+int bk7259_lcd_set_runtime_status(const char *state, bool in_conversation)
+{
+    if (!state || !state[0] ||
+        strnlen(state, BK7259_LCD_STATE_CAPACITY) >= BK7259_LCD_STATE_CAPACITY ||
+        !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
+        return -1;
+    }
+    int ret = -1;
+    if (s_lcd.prepared && s_lcd.accepting && !aosl_atomic_read(&s_lcd.stopping)) {
+        ret = 0;
+        if (!s_lcd.factory_reset_active &&
+            (strcmp(s_lcd.runtime_status.state, state) != 0 ||
+             s_lcd.runtime_status.in_conversation != in_conversation)) {
+            strcpy(s_lcd.runtime_status.state, state);
+            s_lcd.runtime_status.in_conversation = in_conversation;
+            s_lcd.pending = true;
+            notify(&s_lcd.wake);
+        }
+    }
+    unlock(&s_snapshot_lock);
+    return ret;
+}
+
 void bk7259_lcd_set_provisioning_ssid(const char *ssid)
 {
     if (!ssid || !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
@@ -885,12 +912,10 @@ static void lcd_sdk_destroy(void *context)
     if (context != &s_lcd || !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
         return;
     }
-    /* Product UI remains alive for provisioning and reset. Detaching the SDK
-     * must not discard a pending reset phase owned by the product. */
+    /* Product UI remains alive for provisioning, lifecycle text and reset.
+     * Preserve pending snapshots when the SDK detaches; the product publishes
+     * the final stopped status after mybot_stop() returns. */
     s_lcd.sdk_attached = false;
-    if (!s_lcd.factory_reset_active) {
-        s_lcd.pending = false;
-    }
     unlock(&s_snapshot_lock);
 }
 

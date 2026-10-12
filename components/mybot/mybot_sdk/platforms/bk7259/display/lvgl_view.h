@@ -4,6 +4,7 @@
 
 #include "bk7259_expression.h"
 #include "bk7259_factory_reset.h"
+#include "bk7259_lcd.h"
 #include "lvgl.h"
 #include <mybot/platform/mybot_lcd.h>
 
@@ -14,14 +15,17 @@ extern "C" {
 /* Product LVGL view. Only the display owner task calls these functions and LVGL.
  * The display and its active screen must outlive the view. Its single LVGL timer
  * is owned by the view and removed before any widgets on destroy. Update borrows
- * content and provisioning_ssid for the duration of the call. SSIDs are at most
- * 32 bytes; NULL uses the generic provisioning title. No tasks are created here.
+ * content, provisioning_ssid and runtime status for the duration of the call.
+ * SSIDs are at most 32 bytes; NULL uses the generic provisioning title. A NULL
+ * runtime status displays stopped. No tasks are created here.
  * Chinese glyphs cover the fixed UI vocabulary, not arbitrary UTF-8 SSIDs.
  * READY renders the neutral pixel-glasses face; IN_CONVERSATION renders the
- * greeting face. SDK indicators intentionally do not alter these expressions.
+ * greeting face. Runtime state and SDK indicators update only the third terminal
+ * line; these updates preserve expressions and their animation clocks.
  * Objects and borrowed line-point arrays are fixed for the view's lifetime. */
 int mybot_lvgl_view_create(lv_display_t *display);
-void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *provisioning_ssid);
+void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *provisioning_ssid,
+                            const bk7259_lcd_runtime_status_t *status);
 /* Display-owner-only expression override. Guidance/reset screens reject it.
  * Repeating the current ID is a no-op and never restarts an animation. */
 int bk7259_lvgl_view_show_expression(bk7259_expression_t expression);

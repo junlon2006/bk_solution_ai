@@ -14,6 +14,7 @@
 #include <mybot_bk7259_platform.h>
 #include <bk7259_factory_reset.h>
 #include <bk7259_key.h>
+#include <bk7259_lcd.h>
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -33,6 +34,8 @@ static const char k_device_id_hmac_key[] = "mybot-bk7259-device-id-v1";
 extern volatile const char build_version[];
 
 static mybot_config_t s_config;
+/* Only the product task accesses this flag; LCD calls copy into its snapshot. */
+static bool s_display_prepared;
 
 static const char *mybot_state_name(mybot_state_t state)
 {
@@ -53,13 +56,38 @@ static const char *mybot_state_name(mybot_state_t state)
         return "STOPPING";
     case MYBOT_STATE_IN_CONVERSATION:
         return "IN_CONVERSATION";
+    case MYBOT_STATE_PAIRING:
+        return "PAIRING";
     default:
         return "UNKNOWN";
     }
 }
 
+static void mybot_publish_runtime_status(mybot_state_t state)
+{
+    static bool update_failed;
+    char text[BK7259_LCD_STATE_CAPACITY] = {0};
+    const char *name = mybot_state_name(state);
+
+    if (!s_display_prepared) {
+        return;
+    }
+    for (size_t i = 0; name[i] && i < sizeof(text) - 1U; ++i) {
+        text[i] = name[i] >= 'A' && name[i] <= 'Z' ? name[i] + 'a' - 'A' : name[i];
+    }
+    if (bk7259_lcd_set_runtime_status(text, state == MYBOT_STATE_IN_CONVERSATION) < 0) {
+        if (!update_failed) {
+            BK_LOGW(TAG, "runtime status display update failed\r\n");
+        }
+        update_failed = true;
+    } else {
+        update_failed = false;
+    }
+}
+
 /* The SDK owns the state machine. Poll its atomic view at the application
- * boundary and emit one production log record per observed edge. */
+ * boundary, copy display text, and log each observed edge. Publish every
+ * observation so LCD preparation and SDK detach cannot lose an unchanged state. */
 static void mybot_log_state_transition(mybot_state_t *last_state, bool *valid)
 {
     mybot_state_t current;
@@ -68,6 +96,7 @@ static void mybot_log_state_transition(mybot_state_t *last_state, bool *valid)
         return;
     }
     current = mybot_get_state();
+    mybot_publish_runtime_status(current);
     if (!*valid) {
         BK_LOGI(TAG, "runtime state=%s(%d)\r\n", mybot_state_name(current),
                 (int)current);
@@ -157,6 +186,7 @@ static void mybot_factory_reset_loop(bool requested)
         int intent_result = bk7259_factory_reset_begin();
         BK_LOGW(TAG, "stopping SDK for factory reset\r\n");
         mybot_stop();
+        mybot_publish_runtime_status(mybot_get_state());
         if (mybot_is_running() || mybot_get_state() != MYBOT_STATE_STOPPED) {
             BK_LOGE(TAG, "factory reset deferred: SDK has not stopped\r\n");
             show_factory_reset(BK7259_FACTORY_RESET_FAILED);
@@ -228,6 +258,8 @@ static int mybot_run(void)
         aosl_dtor();
         return -1;
     }
+    s_display_prepared = true;
+    mybot_log_state_transition(&last_state, &state_valid);
 
     int reset_pending = bk7259_factory_reset_pending();
     if (reset_pending != 0) {
@@ -242,6 +274,7 @@ static int mybot_run(void)
 
     if (mybot_bk7259_platform_register() < 0) {
         BK_LOGE(TAG, "platform registration failed\r\n");
+        s_display_prepared = false;
         mybot_bk7259_platform_shutdown();
         aosl_dtor();
         return -1;

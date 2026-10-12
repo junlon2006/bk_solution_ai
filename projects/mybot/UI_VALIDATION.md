@@ -9,6 +9,57 @@ SSID 由配网模块复制投递。SDK 的 `include/src` 快照已单独同步�
 旧直接渲染字体及其独立许可证已删除，可从 Git 历史恢复；新资源许可见
 `components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md`。
 
+## 2026-10-12 真实生命周期与会话状态
+
+第三行由真实 SDK 生命周期驱动，READY 显示 `> state: ready`；会话中结合 SDK LCD
+indicator 显示 `listening/thinking/speaking | vp:pending/ok`，没有有效阶段时回到
+`in_conversation`。`vp:ok` 表示本会话已收到声纹成功通知，`pending` 表示尚未确认。
+会话字段仅在运行状态和 LCD 页面同时处于 IN_CONVERSATION 时出现，挂断或断网后隐藏。
+恢复页明确显示 `> state: factory_reset`，避免残留上一会话的阶段和 VP；该文字为产品流程，
+不表示新增 SDK 枚举。四行坐标、字体、表情、光标和显示缓冲沿用现有实现。
+
+应用在现有状态观测中读取 `mybot_get_state()`，补齐 PAIRING 名称映射，经独立
+`include/bk7259_lcd.h` 接口复制到 LCD 快照。LCD 内部去重，首次准备完成及停止返回后
+也发布观测值；仅 UI owner 操作 LVGL。SDK LCD 回调继续提供语义页面与 indicator。
+启动前产品配网时 SDK 可以仍为 STOPPED，配网指导页继续可见。同步停止期间使用现有
+STOPPING 指导页，应用轮询不保证捕获每个瞬态；停止完成后立即发布实际 stopped 值。
+恢复提示仍拥有最高优先级。状态更新不清除表情 override，不重启过渡或光标时钟，
+SLEEP 图案不再决定生命周期文字。
+
+实现基于 Solution `aa95842d0ef80934123a6cb1c7bcc201e35a0ac5`，工作分支为
+`release/v4.0.1-mybot-r2`。合同已核对 SDK `cfd178a` 的完整 PORTING/EMBEDDED、公开
+`mybot.h`/`platform/mybot_lcd.h` 和 BK7259 RTM/声纹参考。MyBot revision lock 聚合摘要为
+`bd59fb9a4f7aced74d5b8e770da869897229316c284e4ccded4d2aa8e667fa7a`，AOSL 摘要为
+`2e9fc3fa5571972fd31c1ab64546477a98550b6b210e38fec181c0f4daeae64e`。
+AVDK 固定 `90aaf113d78ef875635fcc49587f80fd2a8ddadc`，跟踪文件干净。SDK、AOSL、RTSA
+和板级引脚不涉及本次修改，任务前 defconfig 与 RTM 文件哈希复核一致。
+
+验证结果：
+
+- 原工程执行 clean/build，随后包含恢复页文字修复的最终增量构建成功，AP/CP 合包通过。
+  固件沿用当前用户配置：中文、HTTP、视频与 UI 动画开启。生成配置、ELF 端点及新增状态
+  文字已核对，固定 `online/standby` 文字不再链接。
+- 使用真实目标 view、字体及锁定 AVDK LVGL 9.5 主机库，中文、英文、关闭动画三种配置
+  均通过 `-Wall -Wextra -Werror` 与 ASan/UBSan。覆盖真实状态、VP 与阶段变化、阶段清空、
+  未知位、运行状态/页面不一致、借用内容修改、250 ms 过渡期间连续更新、SLEEP override、
+  恢复页去除旧会话字段及每种配置 25 次创建销毁。LeakSanitizer 因环境限制关闭，不计通过。
+- 实际 LVGL 渲染输出已检查，最长 `> state: in_conversation | vp:pending` 为 333 px，
+  可放入现有 366 px 文字区域。字体覆盖检查通过，仍为 152 个操作引导字符。
+- 两仓库 `git diff --check` 通过。旧边界检查器仍固定过期 SDK/AVDK 规则与旧板卡 LCD
+  引脚，并扫描本地参考资料；执行失败，未计为通过，本次不更新该历史检查器。
+
+| 区域 | 当前中文固件 |
+| --- | ---: |
+| AP Flash | 1,895,676 字节 |
+| AP 静态 RAM | 155,140 字节 |
+| AP DTCM | 35,744 字节 |
+| CP Flash | 1,295,948 字节 |
+
+原工程 `package/all-app.bin` SHA256：
+`d647dd49da2699644594ea50db51140211cc41673c4c6e9cc6789eca6bb45822`。
+构建、主机回归和实际 LVGL 截图位于 `/tmp/mybot-ui-live-state.IU4Lg0/`。
+本次真机 RTM 状态、挂断、断网重连和长按恢复效果仍待用户烧录验证。
+
 ## 2026-10-10 四行终端与完整 23 表情
 
 恢复模拟器 `drawGeekFace()` 的四行文字，沿用前一版 9/16 比例、Terminal 15/16 字体和

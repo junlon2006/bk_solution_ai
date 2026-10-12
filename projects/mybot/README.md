@@ -190,22 +190,38 @@ and a smile.
 | Factory reset | Restoring, failed, or rebooting page, with priority over SDK display updates |
 
 Wi-Fi provisioning does not change SDK readiness or bypass pairing. Normal
-idle and conversation screens hide voiceprint and listening/thinking/speaking
-indicators. The SDK continues processing those events, but they do not change
-the face, show toasts, or replay the transition. The simulator's four terminal
-lines are restored:
+idle and conversation screens retain four terminal lines. In READY:
 
 ```text
 > OIM / R2
 > mood: neutral
-> state: online
+> state: ready
 > agora / realtime
 ```
 
-The mood uses the selected expression's lowercase name. The state line is
-`standby` for `SLEEP`, otherwise `online`; these are artwork labels, not SDK or
-connectivity state. The `</>` signature and cursor on the last row remain.
-This UI does not control gimbal movement.
+The mood uses the selected expression's lowercase name independently of SDK
+state. The third line reports the actual state. During a conversation it shows
+`> state: listening | vp:pending`, with the phase following SDK
+`listening`/`thinking`/`speaking` indicators, prioritizing speaking, then thinking,
+then listening when several are active; no active phase falls back to
+`in_conversation`. `vp:ok` means a successful voiceprint notification was
+received in the current session; `vp:pending` means it is not yet confirmed.
+Phase and voiceprint appear only when the runtime state and page are both
+`IN_CONVERSATION`. Status changes update only text, retaining the current face
+and any expression override without restarting its transition or showing a
+toast. SLEEP artwork does not turn the actual state into `standby`.
+The `</>` signature and cursor on the last row remain. This UI does not control
+gimbal movement.
+
+The application publishes the SDK state through the native `bk7259_lcd.h`
+copied snapshot interface from its existing 100 ms observation loop. Existing
+SDK LCD callbacks supply phase and voiceprint indicators; no SDK changes or
+new UI task are needed. Provisioning guidance remains visible while the SDK is
+`STOPPED`. Synchronous SDK stop uses the STOPPING guidance page; after stop
+returns, the application immediately publishes the observed stopped state.
+Factory-reset guidance retains highest priority; its third row is
+`> state: factory_reset` and omits session phase/VP fields. This label describes
+the product flow, not an additional SDK state.
 
 All 23 simulator expressions are implemented, in the simulator's enum order:
 
@@ -329,9 +345,9 @@ Video-specific checks require a build with `CONFIG_MYBOT_VIDEO=y`.
 - [ ] Confirm conversation/video stop holds GPIO30 in reset while GPIO27/1.2 V and GPIO29/2.8 V remain enabled; only full platform shutdown releases the board rails.
 - [ ] Short press/release starts and stops a conversation without blanking the LCD.
 - [ ] Verify neutral idle after actual `READY`, greeting for the entire conversation, and neutral immediately after hangup.
-- [ ] Verify four terminal rows, lowercase expression names, and `standby` only for SLEEP; compare all 23 faces and their motion with the simulator.
+- [ ] Verify four terminal rows, lowercase expression names, actual SDK state, and session-scoped phase/voiceprint text; compare all 23 faces and their motion with the simulator.
 - [ ] Exercise local set/clear requests, invalid names/IDs, indicator updates, workflow changes, and reset priority; verify no automatic expression cycling.
-- [ ] Verify RTM voiceprint/listening/thinking/speaking updates do not show overlays or restart face transitions.
+- [ ] Verify RTM voiceprint/listening/thinking/speaking updates refresh the third row only during a real conversation, do not show overlays, and do not restart face transitions; hangup removes session fields.
 - [ ] Verify both languages, web-console pairing instructions, round-bezel clearance, and factory-reset display priority.
 - [ ] A hold below 5 seconds performs only the state-appropriate short action on release; a 5-second hold resets once and suppresses that action.
 - [ ] Hold the key across reboot, then release; confirm a new gesture is required before another reset.

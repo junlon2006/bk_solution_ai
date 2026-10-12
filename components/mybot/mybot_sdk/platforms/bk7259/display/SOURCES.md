@@ -31,18 +31,25 @@ small immutable A8 masks render filled hearts, stars, ellipses, cheeks, and
 tears without triangle-fan seams. These masks are generated locally from the
 reference geometry; no full-face image or canvas buffer is required.
 
-The renderer restores the simulator's four terminal rows:
+The renderer retains four terminal rows. In READY:
 
 ```text
 > OIM / R2
 > mood: neutral
-> state: online
+> state: ready
 > agora / realtime
 ```
 
-The mood uses the selected expression's lowercase name. The state is `standby`
-only for `SLEEP`, otherwise `online`; these are visual labels rather than SDK
-or connectivity state. The four rows use source position `x=104` and
+The mood uses the selected expression's lowercase name independently of the
+actual SDK state. The third row reports that state. In a conversation it uses
+`> state: listening | vp:pending`, with SDK listening/thinking/speaking phase
+indicators, priority speaking > thinking > listening, and an `in_conversation`
+fallback when no phase is active.
+`vp:ok` means the current session has received a successful voiceprint
+notification; `vp:pending` means it has not yet been confirmed. These session
+fields appear only when both runtime state and screen are IN_CONVERSATION.
+SLEEP artwork does not change the actual state to `standby`.
+The four rows use source position `x=104` and
 `y=108 + 37*i`, preserving the 37-pixel row grid. The `</>` signature at
 `(795,112)` remains left-aligned. The 500 ms cursor follows the last row using
 the actual fixed-width font advance.
@@ -53,7 +60,8 @@ simulator enum, name conversion, and copied local set/clear requests to the
 existing display owner. Overrides are limited to READY/conversation face pages
 and are cleared by workflow screen changes. Indicator-only updates retain the
 selected face and do not restart its transition. Voiceprint and
-listening/thinking/speaking overlays are hidden. Chinese and English
+listening/thinking/speaking indicators update the third terminal row rather
+than showing an overlay. Chinese and English
 provisioning, web-console pairing, error, and factory-reset guidance remain
 available. The additional 21 expressions are not automatically cycled and have
 no MCP/RTM command mapping or UART/motor integration in this change.
@@ -114,6 +122,18 @@ expression motion at no more than 20 fps and static cursor blinking at 500 ms;
 disabling `CONFIG_MYBOT_LVGL_UI_ANIMATIONS` retains static expression artwork.
 The mask data is read-only. There is no runtime canvas or full-frame rotation
 layer; recoloring and opacity are applied through public LVGL image drawing.
+
+The application's existing 100 ms observation loop copies the current SDK
+state through the native `include/bk7259_lcd.h` snapshot interface. Existing
+SDK LCD callbacks provide phase/voiceprint indicators; their publication
+shares the display snapshot lock and owner mailbox. State updates do not
+change the workflow screen, clear expression overrides, or restart animations.
+SDK STOPPED does not hide provisioning guidance. Synchronous SDK stop retains
+the existing STOPPING guidance page, and the application republishes the
+observed stopped state after stop completes. Reset guidance retains priority;
+its third row is `> state: factory_reset` without session phase/VP fields.
+This is a product-flow label, not an additional SDK state, and ordinary status
+updates cannot replace it.
 
 All view and timer operations run on the existing display owner task. The view
 never owns the panel or framebuffer. Reset restoring, failed, and rebooting

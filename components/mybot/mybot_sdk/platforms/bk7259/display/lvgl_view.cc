@@ -6,6 +6,7 @@
 #include "lvgl_view.h"
 #include "pixel_expression_shapes.h"
 
+#include <cstdio>
 #include <cstring>
 
 LV_FONT_DECLARE(mybot_lvgl_font_20);
@@ -19,6 +20,10 @@ constexpr int kArtworkWidth = 1024;
 constexpr int kArtworkHeight = 896;
 constexpr unsigned kFrameParts = 13;
 constexpr size_t kSsidCapacity = 33;
+constexpr size_t kStateLineCapacity =
+    BK7259_LCD_STATE_CAPACITY + sizeof("> state: ") + sizeof(" | vp:pending") - 2;
+constexpr uint32_t kSupportedIndicators =
+    MYBOT_LCD_INDICATOR_VP_REGISTERED | MYBOT_LCD_INDICATOR_SERVER_STATE_MASK;
 constexpr uint32_t kTransitionMs = 250;
 constexpr uint32_t kTransitionTickMs = 50;
 constexpr uint32_t kCursorMs = 500;
@@ -96,9 +101,11 @@ struct View {
     lv_obj_t *notice;
     lv_timer_t *timer;
     mybot_lcd_content_t previous;
+    bk7259_lcd_runtime_status_t runtime_status;
     char provisioning_ssid[kSsidCapacity];
     char pair_code[MYBOT_LCD_PAIR_CODE_CAPACITY];
     char mood[32];
+    char state_line[kStateLineCapacity];
     int artwork_width;
     int artwork_height;
     bool has_content;
@@ -223,8 +230,35 @@ void update_terminal(bk7259_expression_t expression) {
     s_view.mood[out] = '\0';
     /* The owned buffer address is stable; explicitly refresh its changed bytes. */
     lv_label_set_text_static(s_view.terminal[1], s_view.mood);
-    set_text(s_view.terminal[2],
-             expression == BK7259_EXPRESSION_SLEEP ? "> state: standby" : "> state: online");
+}
+
+void update_runtime_terminal(const mybot_lcd_content_t &content,
+                             const bk7259_lcd_runtime_status_t &status) {
+    const bool conversation =
+        status.in_conversation && content.screen == MYBOT_LCD_SCREEN_IN_CONVERSATION;
+    const char *state = status.state;
+    const char *voiceprint = "";
+    if (conversation) {
+        /* A malformed multi-phase mask has a deterministic display priority. */
+        if (content.indicators & MYBOT_LCD_INDICATOR_SPEAKING) {
+            state = "speaking";
+        } else if (content.indicators & MYBOT_LCD_INDICATOR_THINKING) {
+            state = "thinking";
+        } else if (content.indicators & MYBOT_LCD_INDICATOR_LISTENING) {
+            state = "listening";
+        } else {
+            state = "in_conversation";
+        }
+        voiceprint =
+            content.indicators & MYBOT_LCD_INDICATOR_VP_REGISTERED ? " | vp:ok" : " | vp:pending";
+    }
+    char text[kStateLineCapacity]{};
+    std::snprintf(text, sizeof(text), "> state: %s%s", state, voiceprint);
+    if (std::strcmp(text, s_view.state_line) != 0) {
+        std::memcpy(s_view.state_line, text, sizeof(s_view.state_line));
+        /* Static labels retain the address; explicitly invalidate changed bytes. */
+        lv_label_set_text_static(s_view.terminal[2], s_view.state_line);
+    }
 }
 
 void render_expression(uint32_t now) {
@@ -479,17 +513,29 @@ int mybot_lvgl_view_create(lv_display_t *display) {
     }
     lv_timer_pause(s_view.timer);
     const mybot_lcd_content_t initial = {MYBOT_LCD_SCREEN_STARTING, {}, 0};
-    mybot_lvgl_view_update(&initial, nullptr);
+    mybot_lvgl_view_update(&initial, nullptr, nullptr);
     return 0;
 }
 
-void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *ssid) {
+void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *ssid,
+                            const bk7259_lcd_runtime_status_t *status) {
     if (!s_view.root || !content || s_view.factory_reset ||
         content->screen < MYBOT_LCD_SCREEN_STARTING || content->screen >= MYBOT_LCD_SCREEN_COUNT) {
         return;
     }
     mybot_lcd_content_t normalized{};
     normalized.screen = content->screen;
+    normalized.indicators = content->indicators & kSupportedIndicators;
+    bk7259_lcd_runtime_status_t copied_status{};
+    if (status) {
+        for (size_t i = 0; i < sizeof(copied_status.state) - 1 && status->state[i]; ++i) {
+            copied_status.state[i] = status->state[i];
+        }
+        copied_status.in_conversation = status->in_conversation;
+    }
+    if (!copied_status.state[0]) {
+        std::memcpy(copied_status.state, "stopped", sizeof("stopped"));
+    }
     const bool pairing_code = content->screen == MYBOT_LCD_SCREEN_PAIR_CODE;
     const bool provisioning = content->screen == MYBOT_LCD_SCREEN_WIFI_PROVISIONING;
     if (pairing_code) {
@@ -501,19 +547,24 @@ void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *ssid
             copied_ssid[i] = ssid[i];
         }
     }
-    /* This product presents expressions instead of SDK indicator overlays.
-     * Repeated RTM voiceprint/listening/thinking/speaking updates must neither
-     * redraw the face nor restart its transition or cursor clock. */
-    if (s_view.has_content && normalized.screen == s_view.previous.screen &&
-        std::strcmp(normalized.pair_code, s_view.previous.pair_code) == 0 &&
-        std::strcmp(copied_ssid, s_view.provisioning_ssid) == 0) {
+    const bool workflow_changed =
+        !s_view.has_content || normalized.screen != s_view.previous.screen ||
+        std::strcmp(normalized.pair_code, s_view.previous.pair_code) != 0 ||
+        std::strcmp(copied_ssid, s_view.provisioning_ssid) != 0;
+    const bool status_changed =
+        !s_view.has_content || normalized.indicators != s_view.previous.indicators ||
+        copied_status.in_conversation != s_view.runtime_status.in_conversation ||
+        std::strcmp(copied_status.state, s_view.runtime_status.state) != 0;
+    if (!workflow_changed && !status_changed) {
         return;
     }
-    if (content->screen == MYBOT_LCD_SCREEN_READY ||
-        content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION) {
+    update_runtime_terminal(normalized, copied_status);
+    /* Status-only updates preserve expression overrides and both animation clocks. */
+    if (workflow_changed && (content->screen == MYBOT_LCD_SCREEN_READY ||
+                             content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION)) {
         show_face(content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION ? BK7259_EXPRESSION_GREETING
                                                                       : BK7259_EXPRESSION_NEUTRAL);
-    } else {
+    } else if (workflow_changed) {
         show_guide(kScreens[content->screen]);
         if (provisioning) {
             std::memcpy(s_view.provisioning_ssid, copied_ssid, sizeof(s_view.provisioning_ssid));
@@ -536,6 +587,7 @@ void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *ssid
         }
     }
     s_view.previous = normalized;
+    s_view.runtime_status = copied_status;
     std::memcpy(s_view.provisioning_ssid, copied_ssid, sizeof(s_view.provisioning_ssid));
     s_view.has_content = true;
 }
@@ -556,6 +608,8 @@ void bk7259_lvgl_view_show_factory_reset(bk7259_factory_reset_screen_t screen) {
     }
     s_view.factory_reset = true;
     show_guide(kResetScreens[screen]);
+    /* Recovery is product-owned; do not retain phase/VP text from its session. */
+    lv_label_set_text_static(s_view.terminal[2], "> state: factory_reset");
 }
 
 void mybot_lvgl_view_destroy(void) {
