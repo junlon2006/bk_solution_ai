@@ -1,5 +1,14 @@
 menu "MyBot BK7259 platform"
 
+    config MYBOT_HTTPS
+        bool "Use HTTPS for the device service"
+        default y
+        help
+            Use HTTPS for the language-selected device-service endpoint.
+            Disable this option to use HTTP with the same host and API path.
+            This selects both the URL scheme and the SDK transport flags;
+            RTC and RTM transport are unchanged.
+
     config MYBOT_LVGL_UI_ANIMATIONS
         bool "Animate pixel glasses and terminal cursor"
         default y

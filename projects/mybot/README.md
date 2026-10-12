@@ -17,7 +17,7 @@ process-gray skin and pixel-glasses face.
 
 | Core | Responsibility |
 | --- | --- |
-| AP (`bk7259_ap`) | Owns the product control loop, APSTA provisioning, MyBot SDK and AOSL lifecycle, HTTPS/RTC/RTM, audio, LCD, keys, camera capture, H.264 encoding, and video uplink. |
+| AP (`bk7259_ap`) | Owns the product control loop, APSTA provisioning, MyBot SDK and AOSL lifecycle, HTTP(S)/RTC/RTM, audio, LCD, keys, camera capture, H.264 encoding, and video uplink. |
 | CP (`bk7259`) | Initializes the BK runtime and starts the AP system. |
 
 The `bk7259` project target builds and packages both cores.
@@ -37,6 +37,16 @@ For a clean rebuild:
 make -C bk_solution_ai/projects/mybot clean SDK_DIR="$PWD/bk_avdk_smp"
 make -C bk_solution_ai/projects/mybot bk7259 SDK_DIR="$PWD/bk_avdk_smp"
 ```
+
+Device-service REST requests use HTTPS by default (`CONFIG_MYBOT_HTTPS=y`). To
+select HTTP, use `# CONFIG_MYBOT_HTTPS is not set` in
+`projects/mybot/ap/config/bk7259_ap/defconfig` and run the clean rebuild commands
+above. Restore `CONFIG_MYBOT_HTTPS=y` and clean rebuild to return to HTTPS.
+Both modes use the same language-specific hostname and `/api` path:
+`botstation.shengwang.cn` for Chinese and `mybot.sg3.agoralab.co` for English.
+The build maps this option to SDK `MYBOT_ENABLE_HTTPS` and inverse
+`MYBOT_ALLOW_INSECURE_HTTP`; RTC/RTM and the local HTTP provisioning portal are
+unaffected.
 
 The main outputs are:
 
@@ -85,7 +95,7 @@ completion also depends on SDK and driver teardown. The CEN button remains
 hardware reset only; double-press, volume, and other key actions are not registered.
 
 Normal conversation hangup stops local video/RTC and clears session PCM before
-publishing READY and sending one HTTPS stop notification. Notification failure
+publishing READY and sending one HTTP(S) stop notification. Notification failure
 does not restart media or retry; HTTP still runs synchronously on the SDK
 control worker, so a subsequent start can wait for it to finish.
 

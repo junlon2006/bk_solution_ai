@@ -156,7 +156,7 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     -fvisibility=hidden
     $<$<COMPILE_LANGUAGE:C>:-Werror=incompatible-pointer-types>
 )
-# The device service endpoint is https://; plaintext http:// is rejected.
+# Keep the device-service URL scheme and SDK transport policy in sync.
 target_compile_definitions(${COMPONENT_LIB}
     PRIVATE MYBOT_BUILDING_LIBRARY
     PUBLIC
@@ -166,6 +166,6 @@ target_compile_definitions(${COMPONENT_LIB}
         MYBOT_ENABLE_VIDEO=$<BOOL:${CONFIG_MYBOT_VIDEO}>
         MYBOT_AI_QOS=1
         MYBOT_FAST_SEND_MULTIPLIER=3
-        MYBOT_ENABLE_HTTPS=1
-        MYBOT_ALLOW_INSECURE_HTTP=0
+        MYBOT_ENABLE_HTTPS=$<BOOL:${CONFIG_MYBOT_HTTPS}>
+        MYBOT_ALLOW_INSECURE_HTTP=$<NOT:$<BOOL:${CONFIG_MYBOT_HTTPS}>>
 )

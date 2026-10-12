@@ -13,7 +13,7 @@ RTC 双向音频、本地配网与界面，以及可选的单向编码视频上�
 
 | 核 | 职责 |
 | --- | --- |
-| AP（`bk7259_ap`） | 负责产品控制循环、APSTA 配网、MyBot SDK 与 AOSL 生命周期、恢复出厂、HTTPS/RTC/RTM、音频、LCD、按键、摄像头采集、H.264 编码和视频上行。 |
+| AP（`bk7259_ap`） | 负责产品控制循环、APSTA 配网、MyBot SDK 与 AOSL 生命周期、恢复出厂、HTTP(S)/RTC/RTM、音频、LCD、按键、摄像头采集、H.264 编码和视频上行。 |
 | CP（`bk7259`） | 初始化 BK 运行环境并启动 AP 系统。 |
 
 `bk7259` 工程目标会同时编译并打包两个核。
@@ -33,6 +33,14 @@ make -C bk_solution_ai/projects/mybot bk7259 SDK_DIR="$PWD/bk_avdk_smp"
 make -C bk_solution_ai/projects/mybot clean SDK_DIR="$PWD/bk_avdk_smp"
 make -C bk_solution_ai/projects/mybot bk7259 SDK_DIR="$PWD/bk_avdk_smp"
 ```
+
+设备服务 REST 请求默认使用 HTTPS（`CONFIG_MYBOT_HTTPS=y`）。在
+`projects/mybot/ap/config/bk7259_ap/defconfig` 中改为
+`# CONFIG_MYBOT_HTTPS is not set`，执行上面的完整重新编译命令即可切换为 HTTP；
+恢复 `CONFIG_MYBOT_HTTPS=y`，再次 clean 后重新编译即可切回 HTTPS。
+两种协议保持相同的语言域名与 `/api` 路径：中文为 `botstation.shengwang.cn`，
+英文为 `mybot.sg3.agoralab.co`。该选项映射为 SDK 的 `MYBOT_ENABLE_HTTPS` 和取反的
+`MYBOT_ALLOW_INSECURE_HTTP` 编译定义，不改变 RTC/RTM 与本地 HTTP 配网门户。
 
 主要产物为：
 
@@ -74,7 +82,7 @@ CP 初始化 BK 系统并启动 AP。AP 的 `main()` 执行 `bk_init()`、打印
 CEN 保留硬件复位功能，双击、音量和其它按键未注册。长按在按键扫描准备后即可使用，
 不依赖 SDK 按键回调；5 秒是手势阈值，清理完成时间取决于 SDK 和驱动退出。
 
-正常挂断先停止本地视频与 RTC、清理会话 PCM，恢复 READY 后再发送一次 HTTPS 停止通知。
+正常挂断先停止本地视频与 RTC、清理会话 PCM，恢复 READY 后再发送一次 HTTP(S) 停止通知。
 通知失败不重启媒体、不重试；HTTP 仍占用 SDK 控制线程，紧接着发起的新会话可能等待
 该请求完成。
 
