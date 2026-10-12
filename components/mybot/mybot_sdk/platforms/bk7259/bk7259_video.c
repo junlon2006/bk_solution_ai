@@ -152,7 +152,8 @@ static int video_camera_open(bk7259_video_context_t *ctx)
     void *encoder;
     int ret;
 
-    /* GPIO29 supplies both LCD and camera; the display owner holds that rail
+    /* GPIO29 supplies both LCD and camera; GPIO27 enables the replacement
+     * sensor's external 1.2V rail. The display owner holds both board rails
      * from platform prepare through shutdown. Hold the sensor in reset while
      * the camera-specific AuxLDOs and CSI clock are brought up.
      * The sensor driver's detect callback releases

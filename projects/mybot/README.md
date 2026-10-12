@@ -155,9 +155,11 @@ destruction. This board has no volume keys.
 
 The GC9503CV panel is native 480x640 with a logical 640x480 RGB565 UI. GPIO20
 enables the 3.3 V rail, GPIO29 the shared LCD/camera 2.8 V rail, GPIO42 resets the
-panel, and GPIO40 drives its active-low backlight. The LCD owner retains the
-shared rail; conversation/video teardown resets the camera sensor without
-blanking the display. The existing UI worker renders both SDK screens and
+panel, and GPIO40 drives its active-low backlight. GPIO27 drives high during
+platform preparation to enable the external camera 1.2 V rail. The LCD
+board-power owner retains both rails until full platform shutdown;
+conversation/video teardown resets the sensor through GPIO30 without cutting
+board power or blanking the display. The existing UI worker renders both SDK screens and
 bilingual restoring/failed/rebooting pages; reset status takes precedence over
 SDK stop/detach updates.
 
@@ -306,6 +308,7 @@ fault or power-interruption scenario has already been tested on the device.
 Video-specific checks require a build with `CONFIG_MYBOT_VIDEO=y`.
 
 - [ ] Cold boot the combined `all-app.bin` and confirm both AP and CP start.
+- [ ] Confirm the boot log reports `camera 1.2V power enabled: gpio=27 level=1` before sensor detection; verify GPIO27 and the external 1.2 V rail on the new camera hardware.
 - [ ] Confirm the installed GC2053 or CV2005 camera is detected and the source reports 1280x720 at 5 fps with 640x480 H.264 output.
 - [ ] Start a conversation and verify audio in both directions plus H.264 video at the remote endpoint.
 - [ ] Verify camera capture and encoding start only after RTC is connected and emit no frames after conversation teardown begins.
@@ -313,6 +316,7 @@ Video-specific checks require a build with `CONFIG_MYBOT_VIDEO=y`.
 - [ ] Verify a periodic IDR about every 6 seconds and that an RTSA key-frame request forces a new IDR.
 - [ ] Exercise constrained Wi-Fi and confirm RTSA bitrate updates stay within 256-512 kbit/s without breaking audio.
 - [ ] End, restart, and interrupt conversations repeatedly; confirm the encoder, frame pool, camera, and RTC resources stop and restart cleanly.
+- [ ] Confirm conversation/video stop holds GPIO30 in reset while GPIO27/1.2 V and GPIO29/2.8 V remain enabled; only full platform shutdown releases the board rails.
 - [ ] Short press/release starts and stops a conversation without blanking the LCD.
 - [ ] Verify neutral idle after actual `READY`, greeting for the entire conversation, and neutral immediately after hangup.
 - [ ] Verify four terminal rows, lowercase expression names, and `standby` only for SLEEP; compare all 23 faces and their motion with the simulator.

@@ -43,6 +43,9 @@
 /* GPIO29 enables the shared LCD/camera 2.8V rail. Keep it on from platform
  * prepare until full shutdown; stopping video must only reset the sensor. */
 #define LCD_POWER_2V8_GPIO GPIO_29
+/* The replacement MIPI sensor needs the board's external 1.2V rail enabled.
+ * Its GPIO27 gate follows the same platform-lifetime power ownership. */
+#define CAMERA_POWER_1V2_GPIO GPIO_27
 #define LCD_RESET_GPIO GPIO_42
 #define LCD_BACKLIGHT_GPIO GPIO_40
 
@@ -72,6 +75,7 @@ typedef struct {
     bool vddio_owned;
     bool power_gpio_owned;
     bool power_2v8_gpio_owned;
+    bool power_1v2_gpio_owned;
     bool backlight_gpio_owned;
     bool cpu_vote_owned;
     bool controller_inited;
@@ -365,6 +369,21 @@ static int panel_power_on(void)
     s_lcd.power_gpio_owned = true;
     s_lcd.power_2v8_gpio_owned = true;
 
+    if (gpio_dev_unmap(CAMERA_POWER_1V2_GPIO) != BK_OK ||
+        bk_gpio_enable_output(CAMERA_POWER_1V2_GPIO) != BK_OK) {
+        MYBOT_LOGE(TAG, "camera 1.2V power GPIO setup failed");
+        return -1;
+    }
+    /* Record ownership before enabling the rail so a later failure still
+     * releases it during preparation rollback. */
+    s_lcd.power_1v2_gpio_owned = true;
+    if (bk_gpio_pull_up(CAMERA_POWER_1V2_GPIO) != BK_OK ||
+        bk_gpio_set_output_high(CAMERA_POWER_1V2_GPIO) != BK_OK) {
+        MYBOT_LOGE(TAG, "camera 1.2V power enable failed");
+        return -1;
+    }
+    MYBOT_LOGI(TAG, "camera 1.2V power enabled: gpio=27 level=1");
+
     pm_auxldo_ctrl_cfg_t vddio = {
         .ldo = AUXLDOS_SEL_1P8V,
         .out = PM_AUXLDO_1P8V_OUT_1P8V,
@@ -409,6 +428,14 @@ static int panel_power_off(void)
         }
         s_lcd.vddio_owned = false;
     }
+    if (s_lcd.power_1v2_gpio_owned) {
+        if (bk_gpio_set_output_low(CAMERA_POWER_1V2_GPIO) != BK_OK) {
+            MYBOT_LOGW(TAG, "failed to disable camera 1.2V power; retaining power ownership");
+            return -1;
+        }
+        s_lcd.power_1v2_gpio_owned = false;
+        MYBOT_LOGI(TAG, "camera 1.2V power disabled: gpio=27 level=0");
+    }
     if (s_lcd.power_gpio_owned) {
         if (bk_gpio_set_output_low(LCD_POWER_GPIO) != BK_OK) {
             MYBOT_LOGW(TAG, "failed to disable panel 3.3V");
@@ -434,6 +461,7 @@ static bool resources_owned(void)
            s_lcd.controller || s_lcd.panel || s_lcd.bus || s_lcd.frames[0] ||
            s_lcd.frames[1] ||
            s_lcd.vddio_owned || s_lcd.power_gpio_owned || s_lcd.power_2v8_gpio_owned ||
+           s_lcd.power_1v2_gpio_owned ||
            s_lcd.backlight_gpio_owned ||
            s_lcd.cpu_vote_owned;
 }
