@@ -6,7 +6,7 @@
 
 `mybot` is the BK7259 AP/CP firmware integration for the MyBot SDK. It combines
 device-service control, bidirectional RTC audio, local provisioning and UI, and
-one-way encoded video uplink in one conversation.
+optional one-way encoded video uplink in one conversation. Video is disabled by default.
 
 The `release/v4.0.1-mybot-r2` branch targets the Yunqu V1.0 R2 board with a
 GC9503CV MIPI LCD, KEY1/GPIO47, and dual analog microphones plus an amplifier
@@ -257,8 +257,9 @@ for simulator hashes, mask generation/reproduction, and resource origins.
 
 ## 7. Multimodal Video Uplink
 
-The default AP configuration enables `CONFIG_MYBOT_VIDEO=y`. The BK7259 video
-path is:
+The default AP configuration disables video. Set `CONFIG_MYBOT_VIDEO=y` in
+`projects/mybot/ap/config/bk7259_ap/defconfig` and run a clean rebuild to enable
+the following BK7259 video path:
 
 ```text
 MIPI CSI GC2053/CV2005 sensor (1280x720 at 5 fps)
@@ -269,7 +270,7 @@ MIPI CSI GC2053/CV2005 sensor (1280x720 at 5 fps)
   -> Agora RTSA high video stream
 ```
 
-Current settings and behavior:
+Settings and behavior when video is enabled:
 
 | Item | Value |
 | --- | --- |
@@ -301,6 +302,7 @@ The user confirmed basic process-gray pixel-glasses rendering. The restored
 four-line layout and complete 23-expression set await hardware validation.
 The checklist below describes regression coverage; it does not imply every
 fault or power-interruption scenario has already been tested on the device.
+Video-specific checks require a build with `CONFIG_MYBOT_VIDEO=y`.
 
 - [ ] Cold boot the combined `all-app.bin` and confirm both AP and CP start.
 - [ ] Confirm the installed GC2053 or CV2005 camera is detected and the source reports 1280x720 at 5 fps with 640x480 H.264 output.
