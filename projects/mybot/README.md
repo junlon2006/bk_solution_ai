@@ -6,7 +6,7 @@
 
 `mybot` is the BK7259 AP/CP firmware integration for the MyBot SDK. It combines
 device-service control, bidirectional RTC audio, local provisioning and UI, and
-optional one-way encoded video uplink in one conversation. Video is disabled by default.
+optional one-way encoded video uplink in one conversation. Video is enabled by default.
 
 The `release/v4.0.1-mybot-r2` branch targets the Yunqu V1.0 R2 board with a
 GC9503CV MIPI LCD, KEY1/GPIO47, and dual analog microphones plus an amplifier
@@ -257,9 +257,10 @@ for simulator hashes, mask generation/reproduction, and resource origins.
 
 ## 7. Multimodal Video Uplink
 
-The default AP configuration disables video. Set `CONFIG_MYBOT_VIDEO=y` in
-`projects/mybot/ap/config/bk7259_ap/defconfig` and run a clean rebuild to enable
-the following BK7259 video path:
+The default AP configuration enables video (`CONFIG_MYBOT_VIDEO=y`). To disable
+it, use `# CONFIG_MYBOT_VIDEO is not set` in
+`projects/mybot/ap/config/bk7259_ap/defconfig` and run a clean rebuild. With video
+enabled, the BK7259 video path is:
 
 ```text
 MIPI CSI GC2053/CV2005 sensor (1280x720 at 5 fps)

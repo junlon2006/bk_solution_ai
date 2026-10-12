@@ -5,7 +5,7 @@
 ## 1. 工程简介
 
 `mybot` 是 MyBot SDK 的 BK7259 AP/CP 双核固件集成工程，在同一次会话中提供设备服务控制、
-RTC 双向音频、本地配网与界面，以及可选的单向编码视频上行。视频默认关闭。
+RTC 双向音频、本地配网与界面，以及可选的单向编码视频上行。视频默认开启。
 当前 `release/v4.0.1-mybot-r2` 分支适配耘趣 V1.0 / Robot R2 新板，包含 GPIO47 单键
 控制会话与长按恢复出厂、GC9503CV 屏和双模拟麦 AEC；正常界面采用模拟器的工艺灰皮肤与像素眼镜。
 
@@ -199,8 +199,9 @@ LVGL 内部分配与栈峰值仍需在同时音视频运行时实测。
 
 ## 7. 多模态视频上行
 
-AP 默认配置关闭视频。在 `projects/mybot/ap/config/bk7259_ap/defconfig` 中设置
-`CONFIG_MYBOT_VIDEO=y` 并 clean 后重新编译，即可启用以下 BK7259 视频链路：
+AP 默认配置开启视频（`CONFIG_MYBOT_VIDEO=y`）。在
+`projects/mybot/ap/config/bk7259_ap/defconfig` 中改为
+`# CONFIG_MYBOT_VIDEO is not set` 并 clean 后重新编译即可关闭。启用时 BK7259 视频链路为：
 
 ```text
 MIPI CSI GC2053/CV2005 传感器（1280x720，5 fps）
