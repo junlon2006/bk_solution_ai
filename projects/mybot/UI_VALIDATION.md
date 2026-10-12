@@ -9,6 +9,112 @@ SSID 由配网模块复制投递。SDK 的 `include/src` 快照已单独同步�
 旧直接渲染字体及其独立许可证已删除，可从 Git 历史恢复；新资源许可见
 `components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md`。
 
+## 2026-10-12 SDK main 同步与移除 UTC 依赖（PR #111）
+
+远端 `main` 最新提交为 `19a40777768b7384549b46949ef6bb6310923463`，SDK 版本仍为 1.2.0。
+完整更新 58 个 `include/src` 文件，保留既有 HTTPS body 日志补丁、命令解析源的构建注册，
+同步 `SDK_REVISION`、第三方声明和中英文 README。最终聚合摘要为
+`50e365e98307707e4f81ddbd6404ef086bd7e5e77abbc82b92bb805798b327c9`。
+本节是当前基线；后面的 PR #110 记录保留该版本当时的行为和验证结果。
+
+DeviceCommand 的 `issued_at` 与 `expires_at` 现在可省略，提供时也忽略，不再校验 UTC 或
+命令有效期。发送方、频道、conversation ID、停止请求和 AOSL 会话代次校验继续生效。
+去重缓存改为本会话最近接受的 16 个 command ID 的 FIFO：重复 ID 不刷新位置，新 ID
+淘汰最早条目，已被淘汰的旧 ID 再次到达可以重新执行。会话开始和结束清空缓存。
+音量与 PCM 静音沿用现有适配，表情 bit 4..7 到本地图案及 UART/云台的映射仍未接入。
+
+按用户最新指示，撤回此前暂停的 UTC 尝试：AOSL `aosl_hal_time.c` 和 `AOSL_REVISION`、
+AP 的 UTC 日志均恢复任务前状态，移除新增 NTP/时区配置。AOSL 摘要恢复为
+`2e9fc3fa5571972fd31c1ab64546477a98550b6b210e38fec181c0f4daeae64e`，保留五项已有 HAL 补丁。
+AP defconfig 与 SDK 同步前的用户配置哈希一致，仍为中文、HTTP、视频与动画开启。
+AVDK 仍固定 `90aaf113d78ef875635fcc49587f80fd2a8ddadc`，跟踪文件干净。
+
+验证结果：
+
+- 已完整核对新提交的 PORTING/EMBEDDED；LCD/音频契约相对 PR #110 未变。完整文件集合
+  与上游一致，源码仅含已记录的 HTTPS 日志目标补丁，未新增 GCC 原子操作。
+- 原工程 clean/build 和 AP/CP 合包通过。生成配置确认 NTP 同步未启用；固件端点仍为
+  中文 HTTP。命令解析和执行源码已不再引用 `aosl_time_ms()`。
+- 相同 SDK 源在隔离主机工程的完整测试 23/23 通过，用时 7.71 秒。新增测试覆盖时间字段
+  可省略、提供过期/未来/非法类型时忽略、重复字段拒绝、FIFO 满后淘汰、重复不刷新次序、
+  会话清理及现有音量/静音功能。
+- Clang 18.1.3、ASan/UBSan，video=ON、cloud AEC=OFF、60 ms、HTTPS=ON。两个 CMake/安装
+  fixture 按上游设计关闭 sanitizer，AOSL/Agora 外部库未插桩，泄漏检测关闭；这些主机
+  测试不代替实板 RTM 联调。当前 UI/平台源码与此前已验证版本一致。
+- 两仓库 `git diff --check` 通过；旧边界脚本仍因历史 SDK/AVDK 锁、旧板卡假设及参考资料
+  扫描规则失败，不计通过。临时上游仓库的最终远端查询仍为 `19a4077`，只读 SDK 原目录
+  保持原分支和工作树。
+
+| 区域 | 当前中文固件 |
+| --- | ---: |
+| AP Flash | 1,898,956 字节 |
+| AP 静态 RAM | 157,196 字节 |
+| AP DTCM | 35,744 字节 |
+| CP Flash | 1,295,948 字节 |
+
+原工程 `package/all-app.bin` SHA256：
+`953dcbb122819b57639e807c2a3605ff19fe0d634a0d5f9c0fcce7d44cdaca5f`。
+此次构建、源集合审计及测试日志在 `/tmp/mybot-sdk-no-utc.7YJaLu/`；
+源码基于 Solution `7505da4cd7636febab16f40f522772e37cddaa97` 留在 R2 工作树，尚未提交。
+
+## 2026-10-12 SDK main 同步（PR #110）
+
+远端 `main` 更新至 `6aaee82d19b3bc51b0bc153dd65f5bd8d48f2563`，SDK 版本仍为 1.2.0。
+完整导入 58 个 `include/src` 文件，包含新增 DeviceCommand 解析源及内部头文件；本地组件
+CMake 显式加入 `src/core/mybot_device_command.c`。保留原有、逐字一致的 HTTPS body 日志
+目标补丁，更新 `SDK_REVISION` 和第三方声明。完整路径集合与所选提交一致，其余文件与
+上游逐字一致；最终聚合摘要为
+`e60483f268539d0ce25ec100029af2592a1c7bedf5078f00bc1e9a8782e428be`。
+
+SDK 新增通过 RTM P2P/频道接收 DeviceCommand v1、音量设置/增减、PCM 静音及四种表情请求；
+执行前核对发送方、频道、会话、代次与 UTC 有效期，使用 16 项 command ID 记录去重。
+静音保持麦克风采集与上行，云端 AEC 使用实际播放的 PCM；本工程的本地 ADC2 回采 AEC
+配置沿用原实现。VP 与 listening/thinking/speaking 的格式、原有 bit 和显示路径兼容。
+新增原子字段及操作使用 AOSL 接口；上游 GCC 原子 coverage 选项不进入本地固件构建。
+
+当前 MCP 实板使用限制：
+
+- BK725x `aosl_hal_get_time_ms()` 仍返回 `rtos_get_time()` 开机时间，而新 SDK 通过
+  `aosl_time_ms()` 校验 UTC `issued_at/expires_at`。使用真实当前 UTC 的命令会被拒绝，
+  完整 MCP 使用还需要 UTC 时钟适配；本次同步不改变 AOSL HAL。
+- LCD content/ops 结构未变，新增表情 bit 4..7。当前 BK7259 view 继续只消费 VP/阶段
+  bit 0..3，并按公开契约忽略未识别位；还没有 DeviceCommand 到本地表情或 UART/云台的
+  执行映射。后续表情接入需要按一次性命令处理，不能把它并入长期 indicator 去重。
+
+验证结果：
+
+- 完整核对所选提交的 PORTING/EMBEDDED、涉及的 LCD/音频公共契约，以及 BK7259 RTM
+  和项目参考。AVDK 仍为 `90aaf113d78ef875635fcc49587f80fd2a8ddadc` 且跟踪文件干净；
+  AOSL 摘要仍为 `2e9fc3fa5571972fd31c1ab64546477a98550b6b210e38fec181c0f4daeae64e`。
+  BK7259 RTSA 1.10.1 build 1278380 的头文件、库摘要与组件锁一致。
+- 原工程 clean/build 与 AP/CP 合包通过。当前配置为中文、HTTP、视频与动画开启，任务前
+  AP defconfig 哈希不变。ELF 为 ARM32、小端、EABI5 hard-float；确认链接新命令解析、
+  静音、音量及 BK7259 AOSL 原子 HAL 符号，构建未混入主机 SDK 路径。
+- 带原有 HTTPS 日志补丁的相同 SDK 源在隔离主机工程中完整测试 23/23 通过，用时 8.53 秒。
+  Clang 18.1.3，video=ON、cloud AEC=OFF、60 ms、HTTPS=ON；SDK 和 21 个单元/公开头文件
+  可执行测试启用 ASan/UBSan，两个 CMake/安装集成测试按上游设计不启用 sanitizer。
+  主机 AOSL 使用相同上游 base `84e0860` 的临时 Linux HAL；AOSL/Agora 外部库未插桩，
+  LeakSanitizer 因环境限制关闭。以上不代表 BK HAL 和实板联调已验收。
+- HTTP-only 主机首轮为 22/23：唯一失败为 HTTP client 测试无条件要求 HTTPS URL 解析成功，
+  与 HTTP-only 配置不兼容；未修改 SDK 或测试以隐藏此问题。HTTP 中文固件构建及地址校验通过。
+- 当前实际 LVGL view 在新公共头文件下，中英文与关闭动画三配置的 ASan/UBSan 回归通过，
+  包括新增四表情位被忽略时保持阶段/VP、表情、过渡与恢复优先级，以及 25 次创建销毁。
+- 两仓库 `git diff --check` 通过。旧边界检查器仍使用过期版本锁、旧板卡及参考资料扫描
+  规则，执行失败，不计通过；本次不更改该历史脚本。
+
+| 区域 | 当前中文固件 |
+| --- | ---: |
+| AP Flash | 1,899,900 字节 |
+| AP 静态 RAM | 157,324 字节 |
+| AP DTCM | 35,744 字节 |
+| CP Flash | 1,295,948 字节 |
+
+原工程 `package/all-app.bin` SHA256：
+`aea9a3213f676c656ef06f7819b6de8bf44b289d9a711dbc124931e1c3bdfa83`。
+构建、摘要审计与主机测试日志位于 `/tmp/mybot-sdk-refresh.ZSNxhD/`；基于 Solution
+`7505da4cd7636febab16f40f522772e37cddaa97`，更新留在当前 R2 工作树，父 gitlink 尚未更新。
+远端 SDK 的只读源码 checkout 保持原分支；此次 fetch 和主机测试均在临时目录完成。
+
 ## 2026-10-12 真实生命周期与会话状态
 
 第三行由真实 SDK 生命周期驱动，READY 显示 `> state: ready`；会话中结合 SDK LCD

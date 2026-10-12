@@ -13,6 +13,18 @@ GC9503CV MIPI LCD, KEY1/GPIO47, and dual analog microphones plus an amplifier
 feedback channel for hardware AEC. Its normal UI follows the simulator's
 process-gray skin and pixel-glasses face.
 
+The vendored SDK now follows `main` commit
+`19a40777768b7384549b46949ef6bb6310923463` (PR #111, version 1.2.0). RTM
+DeviceCommand v1 keeps sender/channel/conversation/generation checks, but
+`issued_at`/`expires_at` are optional and ignored, with no clock or expiry check.
+The current session deduplicates the latest 16 distinct `command_id` values
+in FIFO order: duplicates do not refresh their position, new IDs evict the
+oldest, and evicted IDs may execute again. MCP volume set/adjust routes through
+the existing volume adapter and mute silences speaker PCM; the command path
+still needs hardware validation. Existing voiceprint/phase indicators remain
+supported; the new emotion bits 4-7 are ignored by this view. MCP mapping to
+local expressions and UART/gimbal actions remains unimplemented.
+
 ## 2. AP and CP Roles
 
 | Core | Responsibility |
