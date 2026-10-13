@@ -617,3 +617,50 @@ UI 工作线程退出、显示关闭和回调等待均有超时；通知信号�
 后续回归应覆盖屏幕方向与颜色、中英文恢复提示、配网/配对、listening/thinking/speaking
 与声纹通知、反复停止/启动 SDK、恢复时断电和失败重试，以及同时音视频时的动画流畅度、
 HSRAM 余量、线程栈高水位和长时间运行情况。
+
+## 2026-10-13 SDK 同步到 e7793eb
+
+已获取远端 `main` 的 `e7793eba88f721304dc00d421706d4d788b81a43`（PR #113，SDK仍为
+1.2.0），全量替换58个跟踪的 `include/src` 文件。源路径集合与该提交完全一致，
+除既有 `src/support/mybot_http_client.c` HTTPS 正文日志补丁外，其余文件逐字节一致。
+`SDK_REVISION` 和第三方声明同步记录，最终聚合摘要为
+`fb7bd88a4d191e3b341c54d8a993b70b4a7b7ea3bd4632411f7899156015fa67`。
+
+同步前详细 HTTP/HTTPS 分段日志及本地 RTC NOTICE 日志已经在工作区回退，实际源码摘要
+为 `5e953e9aae9d359a9962d9acc9a5ea6ddd02bf4e147045ee72d2090410e3dd1f`，与残留的
+`86b9cb...` 锁记录不一致。本次按实际生效的原有 HTTPS 正文日志保留补丁并修正记录，
+不恢复已回退的详细日志。设备ID继续采用产品既定的 `bk_uid_get_data()` 和BK7259前缀，
+以保持已部署设备身份；SDK本次新增ID文档不改变产品派生实现。
+
+本次主要更新：绑定状态轮询和单次挂断通知移到16 KiB栈的 `service_mpq`，由控制线程
+接收带网络/绑定代次的结果；最多一个轮询在途。配对码、开聊和token续期仍同步执行。
+关闭时禁投并排空后台队列，AOSL引用保留至工作线程完成。现有SDK源文件列表和版本生成
+规则无需修改；新增原子变量仍使用AOSL接口。
+
+新合同要求不同HTTPS连接支持并发。BK7259每次连接独立分配TLS、CA、熵源、DRBG和DNS
+请求，但原默认BIO及connect依赖AVDK的全局 `errno`。本次仅在 `bk7259_https.c` 使用
+socket自身的 `SO_ERROR` 分类读写结果，直接进行有界 `select`，连接完成还校验peer。
+没有串行化整个请求；CA链、主机名、SNI和TLS最低版本校验保持原约束。
+
+验证结果：
+
+- 新版上游GCC宿主构建及23项ctest通过，配置为video开启、cloud AEC关闭、HTTPS开启、
+  Linux平台实现关闭。覆盖新后台应用/生命周期、HTTP及公共头/构建集成。
+- 五组真实BK HTTPS适配源码的窄测试及ASAN/UBSAN通过，覆盖跨连接错误隔离、短I/O、
+  EOF/失败、TCP peer确认、select范围、deadline及计时回绕。LeakSanitizer因ptrace环境
+  不可用，ASAN运行关闭全局插桩以排除不参与窄测试的TLS初始化段；堆和栈检查保持开启。
+  真实TLS握手、证书拒绝及实机双连接峰值不属于该窄测试。
+- 在原工程clean后重新编译AP/CP并打包通过，产物为
+  `build/bk7259/mybot/package/all-app.bin`；AP Flash使用1,911,012字节（40.68%），
+  CP Flash使用1,295,948字节（89.88%）。额外16 KiB后台栈和双连接握手堆峰值需实物测量。
+- 已阅读所选提交的完整 `PORTING.zh-CN.md`、`EMBEDDED.zh-CN.md` 及新版HTTPS公共合同，
+  核对当前MbedTLS/lwIP/RTOS实现。AOSL摘要仍为 `2e9fc3fa...`，RTSA头文件和库哈希校验
+  在构建中通过；AVDK固定为 `90aaf113d78ef875635fcc49587f80fd2a8ddadc` 且工作树干净。
+- 最终ARM对象不再引用全局 `errno` 或默认MbedTLS send/recv/poll，仅使用lwIP的
+  per-socket错误/peer查询和select。`git diff --check` 通过。旧boundary checker已重跑，
+  仍因旧版本/LCD/配网规则、参考目录扫描以及把主机测试包含平台源码判为SDK依赖而失败，
+  未计为通过。
+
+本次基于Solution `3adda162bfc8eccab1e68ce4e142814869ee2e5e` 工作区完成，已有云台等
+硬件修改保留，未自动提交或更新父仓库gitlink。权威SDK参考仓库及目标AOSL均未修改。
+测试与构建日志位于 `/tmp/mybot-sdk-refresh.qc2Rwv/`，不属于固件构建输入。

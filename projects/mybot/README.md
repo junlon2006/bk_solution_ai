@@ -14,7 +14,7 @@ feedback channel for hardware AEC. Its normal UI follows the simulator's
 process-gray skin and pixel-glasses face.
 
 The vendored SDK now follows `main` commit
-`7a10696ff27dd947da0558104da6c5414929ea09` (PR #112, version 1.2.0). RTM
+`e7793eba88f721304dc00d421706d4d788b81a43` (PR #113, version 1.2.0). RTM
 DeviceCommand v1 keeps sender/channel/conversation/generation checks, but
 `issued_at`/`expires_at` are optional and ignored, with no clock or expiry check.
 The current session deduplicates the latest 16 distinct `command_id` values
@@ -24,6 +24,12 @@ the existing volume adapter and mute silences speaker PCM; the command path
 still needs hardware validation. Existing voiceprint/phase indicators remain
 supported; the new emotion bits 4-7 are ignored by this view. MCP mapping to
 local expressions and UART/gimbal actions remains unimplemented.
+
+Binding-status polls and stop notifications now run on a separate `service_mpq`,
+so slow background requests do not delay local hangup or the next conversation
+trigger. Conversation start, pairing-code and token-renewal requests remain
+synchronous; SDK shutdown drains the background worker. The HTTPS adapter
+supports independent connections and reads socket errors per connection.
 
 SDK logs no longer use the 512-byte RTM preview or fixed 64-byte RTC error
 storage; borrowed RTC error text is copied while valid and full content reaches
