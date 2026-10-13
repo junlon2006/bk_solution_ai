@@ -14,7 +14,7 @@ feedback channel for hardware AEC. Its normal UI follows the simulator's
 process-gray skin and pixel-glasses face.
 
 The vendored SDK now follows `main` commit
-`19a40777768b7384549b46949ef6bb6310923463` (PR #111, version 1.2.0). RTM
+`7a10696ff27dd947da0558104da6c5414929ea09` (PR #112, version 1.2.0). RTM
 DeviceCommand v1 keeps sender/channel/conversation/generation checks, but
 `issued_at`/`expires_at` are optional and ignored, with no clock or expiry check.
 The current session deduplicates the latest 16 distinct `command_id` values
@@ -24,6 +24,11 @@ the existing volume adapter and mute silences speaker PCM; the command path
 still needs hardware validation. Existing voiceprint/phase indicators remain
 supported; the new emotion bits 4-7 are ignored by this view. MCP mapping to
 local expressions and UART/gimbal actions remains unimplemented.
+
+SDK logs no longer use the 512-byte RTM preview or fixed 64-byte RTC error
+storage; borrowed RTC error text is copied while valid and full content reaches
+the logging layer. The target AOSL HAL's 8 KiB whole-line buffer may still
+truncate larger lines. Ordinary RTM logs remain DEBUG, hidden at default NOTICE.
 
 ## 2. AP and CP Roles
 

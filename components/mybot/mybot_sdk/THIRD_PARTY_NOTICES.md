@@ -4,7 +4,7 @@
 
 The sources under `include/` and `src/` are based on a snapshot of
 https://github.com/junlon2006/mybot at commit
-`19a40777768b7384549b46949ef6bb6310923463`, with the HTTPS body logging patch recorded in
+`7a10696ff27dd947da0558104da6c5414929ea09`, with the HTTPS body logging patch recorded in
 `SDK_REVISION`. They are provided under the Apache License 2.0 in `LICENSE`,
 except where a source file states otherwise.
 

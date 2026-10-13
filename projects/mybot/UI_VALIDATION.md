@@ -9,6 +9,56 @@ SSID 由配网模块复制投递。SDK 的 `include/src` 快照已单独同步�
 旧直接渲染字体及其独立许可证已删除，可从 Git 历史恢复；新资源许可见
 `components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md`。
 
+## 2026-10-13 SDK main 同步与 RTC 日志修复（PR #112）
+
+远端 `main` 最新提交为 `7a10696ff27dd947da0558104da6c5414929ea09`，SDK 版本仍为 1.2.0。
+完整同步 58 个 `include/src` 文件，保留原有 HTTPS body 日志目标补丁，更新 revision lock、
+第三方声明和中英文文档。最终聚合摘要为
+`5e953e9aae9d359a9962d9acc9a5ea6ddd02bf4e147045ee72d2090410e3dd1f`。
+相对 PR #111，公开接口和命令语义未变，源码仅修改 RTC 适配器。
+
+SDK 的 RTM 日志不再截取前 512 字节；RTC 错误文本从固定 64 字节缓冲改为在借用回调
+期间复制完整字符串（含 NUL），随事件投递到 RTC worker 后释放。复制或队列投递失败时
+释放已申请资源；错误文本复制失败会丢弃该错误事件，连接保持原状态，上游测试明确覆盖。
+没有修改 BK7259 平台适配、AOSL、AVDK、音频增益或 UI。时间字段忽略和 16 条 FIFO 去重
+沿用 PR #111，命令执行仍不依赖 UTC。
+
+日志范围需区分：SDK 将完整内容传给日志接口，普通 RTM 日志仍为 DEBUG，默认 NOTICE
+配置不打印。当前目标 AOSL HAL 使用既有 8 KiB 整行 `vsnprintf` 缓冲（有别于上游 BK725x
+参考的 512 字节缓冲），超出整行容量仍会截断。主机的 31 KiB 捕获测试不等于板上最长
+消息完整输出，本次不改变 HAL 缓冲或日志等级。
+
+验证结果：
+
+- 核对新 EMBEDDED 全文；PORTING、平台头文件和 RTSA callback ABI 与 PR #111 相同。
+  原有 RTSA 1.10.1 build 1278380 的头文件、库哈希通过组件校验；无新 GCC 原子操作。
+- 文件集合与所选提交一致，除已记录 HTTPS 日志补丁外均逐字匹配上游。AOSL 聚合摘要
+  仍为 `2e9fc3fa5571972fd31c1ab64546477a98550b6b210e38fec181c0f4daeae64e`；
+  AVDK 固定 `90aaf113d78ef875635fcc49587f80fd2a8ddadc` 且跟踪文件干净。
+- 原工程 clean/build 和 AP/CP 合包通过；沿用当前中文、HTTP、视频与动画配置，
+  任务前 defconfig 哈希一致。ELF 为 ARM32、小端、EABI5 hard-float，端点校验通过。
+- SDK 主机完整测试 23/23 通过，用时 7.72 秒。新增用例验证 2 KiB RTC 错误文本在借用
+  缓冲被改写后仍完整保存、第二次分配失败的清理及连接状态，以及 31 KiB P2P/频道消息
+  与日志捕获内容逐字匹配。
+- Clang 18.1.3、ASan/UBSan，video=ON、cloud AEC=OFF、60 ms、HTTPS=ON。两个 CMake/安装
+  fixture 按上游设计关闭 sanitizer，AOSL/Agora 外部库未插桩，泄漏检测关闭；主机日志
+  捕获 hook 绕过目标 8 KiB HAL，以上不代替实板日志和 RTM 联调。
+- 两仓库 `git diff --check` 通过。旧边界脚本仍因历史版本锁、旧板卡假设和参考资料扫描
+  规则失败，未计为通过，本次不修改该脚本。
+
+| 区域 | 当前中文固件 |
+| --- | ---: |
+| AP Flash | 1,898,948 字节 |
+| AP 静态 RAM | 157,196 字节 |
+| AP DTCM | 35,744 字节 |
+| CP Flash | 1,295,948 字节 |
+
+原工程 `package/all-app.bin` SHA256：
+`9edfd6da76a24699526a8ee8fc30dd4885bb6cb9c31b618a5f74ca091c3ae35d`。
+记录位于 `/tmp/mybot-sdk-rtc-logs.sJ5TW1/`；基于 Solution
+`c8bd51bab48423baa442849ec5ae010352c9f9d5` 留在 R2 工作树，尚未提交。
+此次 fetch 与主机测试在临时目录执行，SDK 原目录保持原分支和工作树。
+
 ## 2026-10-12 SDK main 同步与移除 UTC 依赖（PR #111）
 
 远端 `main` 最新提交为 `19a40777768b7384549b46949ef6bb6310923463`，SDK 版本仍为 1.2.0。
