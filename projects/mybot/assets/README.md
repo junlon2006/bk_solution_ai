@@ -56,7 +56,7 @@ Linux mybot demo（文档标注为同一 `xiaozhi-esp32` 资源的衍生）。�
 
 语言在 `MyBot BK7259 platform` 的 Kconfig choice 中选择。中文使用
 `https://mybot.sh2.agoralab.co/api`，英文使用
-`https://mybot.sg3.agoralab.co/api`；服务器地址由该 choice 派生，不能与内嵌语音标签错配。
+`https://botstation.agora.io/api`；服务器地址由该 choice 派生，不能与内嵌语音标签错配。
 
 ## 固件空间
 

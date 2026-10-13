@@ -51,7 +51,7 @@ make -C bk_solution_ai/projects/mybot bk7259 SDK_DIR="$PWD/bk_avdk_smp"
 `# CONFIG_MYBOT_HTTPS is not set`，执行上面的完整重新编译命令即可切换为 HTTP；
 恢复 `CONFIG_MYBOT_HTTPS=y`，再次 clean 后重新编译即可切回 HTTPS。
 两种协议保持相同的语言域名与 `/api` 路径：中文为 `botstation.shengwang.cn`，
-英文为 `mybot.sg3.agoralab.co`。该选项映射为 SDK 的 `MYBOT_ENABLE_HTTPS` 和取反的
+英文为 `botstation.agora.io`。该选项映射为 SDK 的 `MYBOT_ENABLE_HTTPS` 和取反的
 `MYBOT_ALLOW_INSECURE_HTTP` 编译定义，不改变 RTC/RTM 与本地 HTTP 配网门户。
 
 主要产物为：

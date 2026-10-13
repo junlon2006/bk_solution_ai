@@ -60,7 +60,7 @@ select HTTP, use `# CONFIG_MYBOT_HTTPS is not set` in
 `projects/mybot/ap/config/bk7259_ap/defconfig` and run the clean rebuild commands
 above. Restore `CONFIG_MYBOT_HTTPS=y` and clean rebuild to return to HTTPS.
 Both modes use the same language-specific hostname and `/api` path:
-`botstation.shengwang.cn` for Chinese and `mybot.sg3.agoralab.co` for English.
+`botstation.shengwang.cn` for Chinese and `botstation.agora.io` for English.
 The build maps this option to SDK `MYBOT_ENABLE_HTTPS` and inverse
 `MYBOT_ALLOW_INSECURE_HTTP`; RTC/RTM and the local HTTP provisioning portal are
 unaffected.

@@ -16,7 +16,7 @@
  * implementation. The service endpoint and embedded asset tag stay coupled. */
 #if defined(CONFIG_MYBOT_LANGUAGE_EN_US) && CONFIG_MYBOT_LANGUAGE_EN_US
 #define MYBOT_LANGUAGE_TAG "en-US"
-#define MYBOT_SERVER_BASE MYBOT_SERVER_SCHEME "mybot.sg3.agoralab.co/api"
+#define MYBOT_SERVER_BASE MYBOT_SERVER_SCHEME "botstation.agora.io/api"
 #else
 #define MYBOT_LANGUAGE_TAG "zh-CN"
 /* The /api prefix is part of the device service route. */
