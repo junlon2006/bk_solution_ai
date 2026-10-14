@@ -355,6 +355,7 @@ static uint16_t server_indicator_color(mybot_lcd_indicator_t indicator)
         return COLOR_GREEN;
     case MYBOT_LCD_INDICATOR_NONE:
     case MYBOT_LCD_INDICATOR_VP_REGISTERED:
+    default:
         return COLOR_CYAN;
     }
     return COLOR_CYAN;
@@ -401,6 +402,7 @@ static void draw_server_state_overlay(uint8_t *pixels, mybot_lcd_indicator_t ind
         break;
     case MYBOT_LCD_INDICATOR_NONE:
     case MYBOT_LCD_INDICATOR_VP_REGISTERED:
+    default:
         break;
     }
 }

@@ -8,7 +8,7 @@
 `mybot` is a cross-platform **AI multimodal interaction SDK** for edge devices: it lets smart devices
 send voice and optional device-camera video to cloud AI agents over Agora RTC for real-time
 conversation and visual recognition. The platform/application owns
-APSTA provisioning and Wi-Fi credentials; the SDK consumes connectivity events and handles device
+network provisioning and Wi-Fi credentials; the SDK consumes connectivity events and handles device
 pairing and authentication, a conversation state machine, full-duplex voice interaction (Agora RTSA
 with Agora AI capabilities), optional device-video uplink, button/LCD workflows, and optional local
 wake-word recognition.
@@ -46,18 +46,14 @@ RTOS, or a bare-metal MCU.
 - **Portable to virtually any platform**: The core depends only on C99 and AOSL, and device
   capabilities are injected through the `ops` contract, so it never touches any OS or peripheral
   API directly — Linux, an RTOS, or a bare-metal MCU.
-- **APSTA integration**: Non-blocking startup; the platform owns provisioning and Wi-Fi events drive
-  the application state machine.
+- **Connectivity integration**: The product owns provisioning; the SDK observes the usable network
+  and its runtime disconnect/reconnect events.
 - **Pairing and authentication**: Pair code → device claim → persisted long-lived credential, with
   automatic re-pairing when authentication is rejected.
 - **Conversation state machine**: Five device-service lifecycle states — `unprovisioned / pairing /
   awaiting_claim / runtime / in_conversation` — drive the device-server interaction.
-- **Application lifecycle state**: `mybot_get_state()` exposes startup, pairing, connectivity,
-  shutdown, and conversation state. During device-service provisioning (`unprovisioned`, `pairing`,
-  or `awaiting_claim`) it returns `MYBOT_STATE_PAIRING`; only an authenticated runtime is
-  `MYBOT_STATE_READY`. After the device service accepts a conversation it returns
-  `MYBOT_STATE_IN_CONVERSATION`; normal teardown returns to `MYBOT_STATE_READY`, while
-  `MYBOT_STATE_WIFI_DISCONNECTED` takes precedence when connectivity is lost.
+- **Application lifecycle state**: `mybot_get_state()` exposes startup, device pairing, connectivity,
+  shutdown, and conversation state; the values are defined in [mybot.h](include/mybot/mybot.h).
 - **Full-duplex voice · barge-in**: Uplink and downlink run simultaneously; the user can interrupt
   the AI mid-reply at any time, and the microphone keeps streaming so the cloud agent hears and
   responds to new input.
@@ -69,11 +65,15 @@ RTOS, or a bare-metal MCU.
   application-facing volume API.
 - **Optional local wake words**: Off by default; wake behavior is identical to starting a
   conversation with a physical button.
-- **Button and LCD workflows**: Semantic screen states (provisioning / pairing / pair code / ready /
+- **Button and LCD workflows**: Semantic screen states (waiting for network / pairing / pair code / ready /
   in conversation); how each is displayed is up to the platform.
 - **Voiceprint registration status**: During an active conversation, the SDK listens on the
   conversation RTM channel for the server's `message.sal_status` / `VP_REGISTER_SUCCESS` message
   and exposes `MYBOT_LCD_INDICATOR_VP_REGISTERED` as an in-conversation LCD overlay.
+- **Cloud MCP device commands**: Receive session-bound DeviceCommand v1 messages over RTM to
+  control playback volume/mute and request happy, sad, angry, or surprised LCD expressions.
+  The cloud owns MCP tool invocation; the SDK reuses its media and LCD paths. Integration is
+  described in [PORTING.md](docs/PORTING.md#mcp-device-commands).
 - **Pairing-code voice prompt**: Once per pair code, plays a fixed prompt ("Please enter the
   pairing code in the console") followed by one sound per digit through the normal speaker path. Assets are raw
   16 kHz mono s16 PCM files under `./assets/locales/<locale>/` (`prompt.pcm`, `0.pcm`..`9.pcm`);
@@ -91,7 +91,7 @@ RTOS, or a bare-metal MCU.
 - The RTC implementation is specific to Agora RTSA; no other RTC protocol adapter is provided.
 - Local ASR wake words are an optional platform implementation, off by default; enabling them
   requires the platform to register an implementation.
-- The platform/application owns APSTA provisioning and credential storage; the SDK consumes only
+- The platform/application owns network provisioning and Wi-Fi credential storage; the SDK consumes only
   connectivity events through the Wi-Fi interface.
 - The device server is not part of this repository; running the examples requires a compatible
   server endpoint.
@@ -146,15 +146,37 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Run the example:
+### Device-service addresses
+
+Choose the base URL for the device's region. Pass it through `--server` in the Linux example or
+`mybot_config_t.server_base` in a product integration, including `/api` without a trailing slash.
+
+| Region | Device-service base URL |
+| --- | --- |
+| Mainland China | `https://botstation.shengwang.cn/api` |
+| Overseas | `https://botstation.agora.io/api` |
+
+`device_id` is the globally unique, stable identity of one physical device. Product and device
+registration systems must ensure that each ID belongs to exactly one device.
+Each chip platform uses a distinct, fixed chip prefix to isolate its ID namespace, so identical
+digest suffixes on different platforms still produce different complete IDs.
+The product generates it as `<chip>-<24 uppercase hex characters>`: use the first
+12 bytes of HMAC-SHA256 over its stable MAC address, with a fixed platform derivation key.
+The chip prefix is at most 7 ASCII characters, so the complete ID is at most 32 characters,
+excluding the terminating NUL. See [Device ID generation](docs/PORTING.md#device-id-generation)
+for the input and key rules. The SDK receives this ID; it does not generate it.
+
+Run the example with the overseas service:
 
 ```bash
 ./build/examples/linux/mybot \
-  --server https://api.example.com \
-  --device-id AG-DEMO-001 \
+  --server https://botstation.agora.io/api \
+  --device-id ESP32-BF0C5C8DD323ED321F928C79 \
   --fw-ver 1.2.0 \
   --hw-model linux-reference
 ```
+
+Replace the sample ID with the ID generated for your device.
 
 The example also plays an optional pairing-code voice prompt ("Please enter the pairing code in the console...") from
 `./assets/locales/<locale>/` (raw 16 kHz mono s16 PCM: `prompt.pcm`, `0.pcm`..`9.pcm`).
@@ -205,30 +227,10 @@ creating any platform resources. Every platform is submitted through this one de
 full implementation order, minimal code, threading constraints, and acceptance checklist, see
 [docs/PORTING.md](docs/PORTING.md).
 
-Minimal application lifecycle:
-
-```c
-/* Host-defined function that fills and registers one complete descriptor. */
-my_mcu_platform_register();
-mybot_config_t config = {0};
-mybot_start(&config);
-while (mybot_is_running()) {
-    platform_sleep_ms(100);
-}
-mybot_stop();
-```
-
-`mybot_start()` is non-blocking: it starts provisioning first, then initializes storage,
-buttons, audio, and the device service asynchronously once usable network connectivity is
-reported. RTC is initialized on demand when a conversation starts.
-`mybot_start()` and `mybot_stop()` are thread-safe and serialize their work through the application
-lifecycle gate and control owner. `mybot_stop()` waits for worker shutdown and must not be called
-from inside a platform or SDK callback. If a worker cannot be joined, the SDK retains its resources
-for a later stop attempt; callers should treat shutdown as incomplete until the runtime reports
-stopped. The application acquires one reference to the process-wide AOSL runtime inside
-`mybot_start()` and releases it at the end of `mybot_stop()`.
-The RTSA lifecycle is initialized and finalized through `agora_rtc_init()` / `agora_rtc_fini()`.
-A host that uses AOSL directly must keep its own `aosl_ctor()` / `aosl_dtor()` pair balanced.
+The product completes network provisioning before starting MyBot and stops MyBot before entering
+provisioning again. The SDK owns device-service pairing and conversations, independently of that
+network setup. See [PORTING: start and stop](docs/PORTING.md#step-6-start-and-stop) for the
+integration sequence and example, and [mybot.h](include/mybot/mybot.h) for the API contract.
 
 The bundled Linux RTSA package is a shared library. CMake supplies a build-tree runtime path for the
 reference executable and tests. Installed-package consumers must deploy `libagora-rtc-sdk.so` and
@@ -399,24 +401,13 @@ Layer notes:
 
 ### Threading model
 
-`mybot_start()` creates four core worker threads (AOSL MPQ queues) with strictly separated
-responsibilities. RTC creates a fifth, on-demand `rtc_mpq` worker when a conversation starts; all
-RTSA lifecycle calls and vendor callbacks are serialized there:
-
-| Thread (MPQ) | Driven by | Responsibility |
-| --- | --- | --- |
-| `control_mpq` | Events and 100 ms timer | Owns application state, device lifecycle, blocking HTTP/RTC control, UI/volume actions, and resource transitions |
-| `mybot_mpq` | ptime timer | Sends uplink audio at the packetization cadence (Agora RTSA) |
-| `cap_mpq` | ptime timer | Mic capture → capture ring buffer → (optional) wake words |
-| `pb_mpq` | ptime timer | Playback ring buffer → speaker; also feeds the AEC reference channel |
-| `rtc_mpq` | RTC/RTM callbacks and synchronous RTC commands | Serializes RTSA lifecycle, vendor calls, and application callbacks; created on demand |
-
-Callbacks keep their work bounded: they enqueue a short control event or publish an atomic mailbox.
-PCM capture, RTC uplink/downlink, and playback stay on the direct data path and never pass through
-`control_mpq`. The real-time audio timers (cap / pb / send) are independent, so blocking control or
-device-service work cannot stall the audio cadence.
-When video is enabled, the platform encoder owns frame capture and timing; the SDK adds no video
-worker or frame queue. Each encoded frame is borrowed only for the synchronous RTC send call.
+Application control, background device-service HTTP, RTC, capture, playback, and audio sending
+use separate workers. `service_mpq` handles binding-status polling and stop notifications; their
+results return to `control_mpq`, which owns lifecycle state. HTTPS adapters must support concurrent
+independent connections. The platform owns the optional video encoder task.
+For the thread/stack budget, dynamic allocations, and timing
+measurements, see [EMBEDDED](docs/EMBEDDED.md); platform callback contracts live in the
+[public headers](include/mybot/platform/).
 
 ### Workflows
 
@@ -493,8 +484,13 @@ Key CMake targets:
 
 ## Documentation
 
+This repository maintains the SDK core and Linux reference implementation. BK7258, BK7259,
+and ESP32 adapters, board configuration, and firmware builds are maintained in the independent
+projects linked below.
+
+- [Public headers](include/mybot/) — authoritative API and platform contracts; this README is the overview
 - [docs/PORTING.md](docs/PORTING.md) ([简体中文](docs/PORTING.zh-CN.md)) — porting guide and
-  acceptance checklist
+  integration sequence and acceptance checklist
 - [mybot-bk7258](https://github.com/junlon2006/mybot-bk7258) — BK7258 reference firmware project
 - [mybot-bk7259](https://github.com/junlon2006/mybot-bk7259) — BK7259 reference firmware project
 - [mybot-esp32](https://github.com/junlon2006/mybot-esp32) — ESP32 cross-platform reference project
@@ -507,6 +503,11 @@ Key CMake targets:
 
 ## Development and verification
 
+Unit tests exercise malformed service responses, allocation and startup failures, callback
+buffer ownership, and recovery after shutdown errors. Video tests run with the feature both
+enabled and disabled. The internal JSON helper rejects non-finite numbers and floating-point
+values outside `[-2^63, 2^63)`, and preserves parsed signed 64-bit integers when printing.
+
 ```bash
 cmake -S . -B build -DCONFIG_PLATFORM=linux -DMYBOT_ENABLE_ASAN=ON
 cmake --build build -j
@@ -516,12 +517,14 @@ find include src platforms/linux examples/linux tests -type f \
   -exec clang-format --dry-run --Werror {} +
 ```
 
-- Host-checked C code follows the root `.clang-format`; `third_party/` keeps upstream content,
-  and BK725x Armino sources use their firmware toolchain's formatting rules.
+- Self-maintained C code follows the root `.clang-format`; `third_party/` keeps upstream content.
 - CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the build, tests, and format check
   on every push / PR; make sure your local commands match CI before merging.
 - CI builds with both GCC and Clang under ASan and UBSan, runs cppcheck and clang-tidy static
   analysis, and publishes gcov/lcov coverage to Codecov.
+- Feature configurations cover disabled cloud AEC, enabled wake words, and enabled video. Unit
+  tests and CMake source/install consumers use the selected SDK feature values; video CI uses
+  mock platform encoders and does not replace device validation.
 - Commit messages follow Conventional Commits (see `CONTRIBUTING.md`). Install the local
   `commit-msg` hook once per clone with `./scripts/setup-githooks.sh`; CI validates every pushed /
   PR commit subject.

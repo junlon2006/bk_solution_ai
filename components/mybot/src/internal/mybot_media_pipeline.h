@@ -48,6 +48,7 @@ typedef struct {
     bool initialized;
     aosl_atomic_t running;
     aosl_atomic_t rtc_connected;
+    aosl_atomic_t muted;
 #if MYBOT_WAKE_WORDS
     aosl_atomic_t wake_words_enabled;
 #endif
@@ -78,6 +79,8 @@ typedef struct {
     int pb_pending_offset;
     int pb_pending_frames;
     mybot_pb_source_t pb_pending_source;
+    /* Last observed announcement generation; also tags any pending PCM. */
+    uint32_t pb_pending_generation;
     int16_t announce_frame[MYBOT_MEDIA_FRAME_SAMPLES];
     bool stop_complete;
 
@@ -96,9 +99,12 @@ typedef struct {
 void mybot_media_pipeline_init(mybot_media_pipeline_t *pipeline);
 int mybot_media_pipeline_start(mybot_media_pipeline_t *pipeline,
                                const mybot_media_pipeline_callbacks_t *callbacks);
-/** Stop workers and device I/O; returns -1 while any worker remains live. */
+/**
+ * Stop workers, device I/O, and prompts; retain buffers and prompt state until destroy.
+ * Returns -1 while any worker remains live.
+ */
 int mybot_media_pipeline_stop(mybot_media_pipeline_t *pipeline);
-/** Destroy ring buffers after a successful stop. */
+/** Release buffers and prompt state after a successful stop and RTC callbacks have drained. */
 int mybot_media_pipeline_destroy(mybot_media_pipeline_t *pipeline);
 
 void mybot_media_pipeline_set_rtc_connected(mybot_media_pipeline_t *pipeline, bool connected);
@@ -114,7 +120,12 @@ void mybot_media_pipeline_push_remote_audio(mybot_media_pipeline_t *pipeline, co
 int mybot_media_pipeline_play_prompt(mybot_media_pipeline_t *pipeline, mybot_prompt_type_t type,
                                      const void *args);
 void mybot_media_pipeline_stop_prompt(mybot_media_pipeline_t *pipeline);
-void mybot_media_pipeline_adjust_volume(mybot_media_pipeline_t *pipeline, int delta);
+/** Set playback volume (0..100) without changing the independent mute setting. */
+int mybot_media_pipeline_set_volume(mybot_media_pipeline_t *pipeline, int volume);
+/** Adjust playback volume by -100..100, saturating the result to 0..100. */
+int mybot_media_pipeline_adjust_volume(mybot_media_pipeline_t *pipeline, int delta);
+/** Mute RTC and local prompt output; microphone capture and upload continue unchanged. */
+void mybot_media_pipeline_set_muted(mybot_media_pipeline_t *pipeline, bool muted);
 
 #ifdef __cplusplus
 }

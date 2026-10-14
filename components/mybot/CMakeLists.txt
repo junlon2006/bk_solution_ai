@@ -19,6 +19,7 @@ set(priv_incs
 
 set(sdk_srcs
     src/core/mybot_app.c
+    src/core/mybot_device_command.c
     src/core/mybot_device_lifecycle.c
     src/core/mybot_presenter.c
     src/core/mybot_state_model.c

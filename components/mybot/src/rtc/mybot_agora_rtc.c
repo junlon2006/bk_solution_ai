@@ -182,9 +182,6 @@ typedef struct {
             char uid_text[MYBOT_RTM_UID_MAX_LEN];
         } rtm_send_result;
         struct {
-            char text[AGORA_RTC_CHANNEL_NAME_MAX_LEN + 1];
-        } error;
-        struct {
             user_info_t user;
         } user;
         struct {
@@ -207,6 +204,16 @@ static void rtc_event_free(rtc_event_t *event) {
         aosl_hal_free(event->data);
         aosl_hal_free(event);
     }
+}
+
+/* Copy borrowed callback bytes into storage released by rtc_event_free(). */
+static bool rtc_event_copy_data(rtc_event_t *event, const void *data, size_t len) {
+    event->data = aosl_hal_malloc(len);
+    if (!event->data) {
+        return false;
+    }
+    memcpy(event->data, data, len);
+    return true;
 }
 
 static void rtc_event_process(const aosl_ts_t *ts, aosl_refobj_t ref, uintptr_t argc,
@@ -278,7 +285,7 @@ static void rtc_event_process(const aosl_ts_t *ts, aosl_refobj_t ref, uintptr_t 
         break;
 #endif
     case RTC_EVENT_ERROR:
-        process_error(e->conn_id, e->value, e->payload.error.text);
+        process_error(e->conn_id, e->value, (const char *)e->data);
         break;
     case RTC_EVENT_LICENSE:
         process_license_failed(e->conn_id, e->value);
@@ -321,6 +328,18 @@ static rtc_event_t *rtc_event_new(rtc_event_type_t type) {
         event->type = type;
     }
     return event;
+}
+
+static void queue_rtc_notification(rtc_event_type_t type, connection_id_t conn_id, uint32_t uid,
+                                   int value) {
+    rtc_event_t *event = rtc_event_new(type);
+    if (!event) {
+        return;
+    }
+    event->conn_id = conn_id;
+    event->uid = uid;
+    event->value = value;
+    (void)rtc_event_queue(event);
 }
 
 static const char *state_name(mybot_rtc_state_t state) {
@@ -532,8 +551,6 @@ static void process_rtm_event(const char *rtm_uid, rtm_event_type_e event_type,
 static void process_rtm_data(const char *rtm_uid, const void *data, size_t len,
                              rtm_message_type_e message_type, const char *custom_type,
                              uint32_t generation) {
-    size_t preview_len = len > 512U ? 512U : len;
-
     if (!s_rtc.rtm_login_requested) {
         AOSL_LOG_DBG(
             "[RTM] data ignored: login was not requested (from=%s, message_type=%s, type=%s, "
@@ -548,11 +565,10 @@ static void process_rtm_data(const char *rtm_uid, const void *data, size_t len,
         return;
     }
 
-    if (message_type == RTM_MESSAGE_TYPE_STRING && data && preview_len > 0) {
+    if (message_type == RTM_MESSAGE_TYPE_STRING && data && len > 0) {
         AOSL_LOG_DBG("[RTM] data received: from=%s message_type=%s type=%s len=%zu msg=%.*s",
                      rtm_uid ? rtm_uid : "(null)", rtm_message_type_name(message_type),
-                     custom_type ? custom_type : "(null)", len, (int)preview_len,
-                     (const char *)data);
+                     custom_type ? custom_type : "(null)", len, (int)len, (const char *)data);
     } else if (message_type == RTM_MESSAGE_TYPE_STRING) {
         AOSL_LOG_DBG("[RTM] data received: from=%s message_type=%s type=%s len=%zu msg=(empty)",
                      rtm_uid ? rtm_uid : "(null)", rtm_message_type_name(message_type),
@@ -616,8 +632,6 @@ static void process_rtm_subscribe_result(const char *channel, rtm_err_code_e err
 static void process_rtm_subscribe_data(const char *channel, const char *rtm_uid, const void *data,
                                        size_t len, rtm_message_type_e message_type,
                                        const char *custom_type, uint32_t generation) {
-    size_t preview_len = len > 512U ? 512U : len;
-
     if (!s_rtc.rtm_subscribed) {
         AOSL_LOG_DBG("[RTM] channel data ignored: no active subscription (channel=%s, from=%s, "
                      "len=%zu)",
@@ -639,12 +653,11 @@ static void process_rtm_subscribe_data(const char *channel, const char *rtm_uid,
         return;
     }
 
-    if (data && preview_len > 0) {
+    if (data && len > 0) {
         AOSL_LOG_DBG("[RTM] channel data received: channel=%s from=%s message_type=%s type=%s "
                      "len=%zu msg=%.*s",
                      channel, rtm_uid ? rtm_uid : "(null)", rtm_message_type_name(message_type),
-                     custom_type ? custom_type : "(null)", len, (int)preview_len,
-                     (const char *)data);
+                     custom_type ? custom_type : "(null)", len, (int)len, (const char *)data);
     } else {
         AOSL_LOG_DBG("[RTM] channel data received: channel=%s from=%s message_type=%s type=%s "
                      "len=%zu msg=(empty)",
@@ -1059,12 +1072,10 @@ static void on_rtm_data(const char *uid, const void *data, size_t len, rtm_messa
     e->payload.rtm_data.message_type = type;
     e->generation = (uint32_t)aosl_atomic_read(&s_rtm_login_generation);
     e->payload.rtm_data.len = len;
-    e->data = aosl_hal_malloc(len);
-    if (!e->data) {
+    if (!rtc_event_copy_data(e, data, len)) {
         rtc_event_free(e);
         return;
     }
-    memcpy(e->data, data, len);
     (void)rtc_event_queue(e);
 }
 static void on_rtm_subscribe_result(const char *channel, rtm_err_code_e error) {
@@ -1126,12 +1137,10 @@ static void on_rtm_subscribe_data(const char *channel, const char *uid, const vo
     e->payload.rtm_sub_data.message_type = type;
     e->generation = (uint32_t)aosl_atomic_read(&s_rtm_sub_generation);
     e->payload.rtm_sub_data.len = len;
-    e->data = aosl_hal_malloc(len);
-    if (!e->data) {
+    if (!rtc_event_copy_data(e, data, len)) {
         rtc_event_free(e);
         return;
     }
-    memcpy(e->data, data, len);
     (void)rtc_event_queue(e);
 }
 static void on_rtm_send_data_result(const char *uid, uint32_t id, rtm_msg_state_e state) {
@@ -1154,36 +1163,16 @@ static void on_rtm_send_data_result(const char *uid, uint32_t id, rtm_msg_state_
     (void)rtc_event_queue(e);
 }
 static void on_join_channel_success(connection_id_t c, uint32_t uid, int elapsed) {
-    rtc_event_t *e = rtc_event_new(RTC_EVENT_JOIN_SUCCESS);
-    if (!e)
-        return;
-    e->conn_id = c;
-    e->uid = uid;
-    e->value = elapsed;
-    (void)rtc_event_queue(e);
+    queue_rtc_notification(RTC_EVENT_JOIN_SUCCESS, c, uid, elapsed);
 }
 static void on_reconnecting(connection_id_t c) {
-    rtc_event_t *e = rtc_event_new(RTC_EVENT_RECONNECTING);
-    if (e) {
-        e->conn_id = c;
-        (void)rtc_event_queue(e);
-    }
+    queue_rtc_notification(RTC_EVENT_RECONNECTING, c, 0, 0);
 }
 static void on_connection_lost(connection_id_t c) {
-    rtc_event_t *e = rtc_event_new(RTC_EVENT_CONNECTION_LOST);
-    if (e) {
-        e->conn_id = c;
-        (void)rtc_event_queue(e);
-    }
+    queue_rtc_notification(RTC_EVENT_CONNECTION_LOST, c, 0, 0);
 }
 static void on_rejoin_channel_success(connection_id_t c, uint32_t uid, int elapsed) {
-    rtc_event_t *e = rtc_event_new(RTC_EVENT_REJOIN_SUCCESS);
-    if (e) {
-        e->conn_id = c;
-        e->uid = uid;
-        e->value = elapsed;
-        (void)rtc_event_queue(e);
-    }
+    queue_rtc_notification(RTC_EVENT_REJOIN_SUCCESS, c, uid, elapsed);
 }
 static void on_user_joined(connection_id_t c, const user_info_t *u, int elapsed) {
     if (!u)
@@ -1225,12 +1214,10 @@ static void on_audio_data(connection_id_t c, uint32_t uid, uint16_t ts, const vo
         e->payload.audio.audio_info = *i;
         e->payload.audio.has_audio_info = true;
         e->payload.audio.len = len;
-        e->data = aosl_hal_malloc(len);
-        if (!e->data) {
+        if (!rtc_event_copy_data(e, d, len)) {
             rtc_event_free(e);
             return;
         }
-        memcpy(e->data, d, len);
         (void)rtc_event_queue(e);
     }
 }
@@ -1269,26 +1256,19 @@ static void on_error(connection_id_t c, int code, const char *m) {
     if (e) {
         e->conn_id = c;
         e->value = code;
-        if (m)
-            snprintf(e->payload.error.text, sizeof(e->payload.error.text), "%s", m);
+        if (m && !rtc_event_copy_data(e, m, strlen(m) + 1U)) {
+            rtc_event_free(e);
+            return;
+        }
         (void)rtc_event_queue(e);
     }
 }
 static void on_license_failed(connection_id_t c, int reason) {
-    rtc_event_t *e = rtc_event_new(RTC_EVENT_LICENSE);
-    if (e) {
-        e->conn_id = c;
-        e->value = reason;
-        (void)rtc_event_queue(e);
-    }
+    queue_rtc_notification(RTC_EVENT_LICENSE, c, 0, reason);
 }
 static void on_token_will_expire(connection_id_t c, const char *t) {
     (void)t;
-    rtc_event_t *e = rtc_event_new(RTC_EVENT_TOKEN);
-    if (e) {
-        e->conn_id = c;
-        (void)rtc_event_queue(e);
-    }
+    queue_rtc_notification(RTC_EVENT_TOKEN, c, 0, 0);
 }
 
 static void clear_runtime_state(void) {
@@ -1789,7 +1769,7 @@ int mybot_agora_rtc_init(const char *app_id, const mybot_agora_rtc_callbacks_t *
     aosl_mpq_t q = (aosl_mpq_t)aosl_atomic_read(&s_rtc_mpq_id);
     if (q == AOSL_MPQ_INVALID) {
         q = aosl_mpq_create_flags(AOSL_MPQ_FLAG_SIGP_EVENT | AOSL_MPQ_FLAG_NONBLOCK,
-                                  AOSL_THRD_PRI_NORMAL, 8192, 64, "mybot_rtc", NULL, NULL, NULL);
+                                  AOSL_THRD_PRI_NORMAL, 8192, 1000, "mybot_rtc", NULL, NULL, NULL);
         if (q == AOSL_MPQ_INVALID)
             return -1;
         aosl_atomic_set(&s_rtc_mpq_id, q);

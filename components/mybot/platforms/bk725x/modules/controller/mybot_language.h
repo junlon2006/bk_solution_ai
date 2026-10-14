@@ -8,11 +8,11 @@
  * from that single choice. */
 
 #ifdef CONFIG_MYBOT_LANGUAGE_ZH_CN
-#define MYBOT_SERVER_BASE "https://mybot.sh2.agoralab.co/api"
+#define MYBOT_SERVER_BASE "https://botstation.shengwang.cn/api"
 #define MYBOT_ASSETS_DIR "mybot/assets"
 #define MYBOT_LANGUAGE_TAG "zh-CN"
 #elif defined(CONFIG_MYBOT_LANGUAGE_EN_US)
-#define MYBOT_SERVER_BASE "https://mybot.sg3.agoralab.co/api"
+#define MYBOT_SERVER_BASE "https://botstation.agora.io/api"
 #define MYBOT_ASSETS_DIR "mybot/assets"
 #define MYBOT_LANGUAGE_TAG "en-US"
 #else
