@@ -8,6 +8,15 @@
 device-service control, bidirectional RTC audio, local provisioning and UI, and
 one-way encoded video uplink in one conversation.
 
+The SDK snapshot follows upstream `main` commit
+`e7793eba88f721304dc00d421706d4d788b81a43` (version 1.2.0), with the existing declared
+HTTPS-body logging patch. It adds RTM DeviceCommand v1 for volume, mute and four
+emotions without a UTC dependency, and moves binding polls/stop notifications to
+a background service queue so local hangup completes before HTTP notification.
+The current old-board UI handles voiceprint/server phases and ignores emotion
+bits 4-7; UI integration follows in a separate change. This SDK-only update
+keeps AVDK, audio, keys, video, power, GPIO and partitions unchanged.
+
 ## 2. AP and CP Roles
 
 | Core | Responsibility |

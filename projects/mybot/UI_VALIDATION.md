@@ -112,3 +112,33 @@ UI 工作线程退出、显示关闭和回调等待均有超时；通知信号�
 尚未连接实板验证。烧录后重点检查：屏幕方向和 RGB565 颜色、中英文切换、配网/配对、
 listening/thinking/speaking 与声纹通知、反复停止/启动 SDK，以及同时开启音视频时的
 动画流畅度、HSRAM 余量、线程栈高水位和长时间运行情况。
+
+## 2026-10-16 旧硬件分支SDK同步
+
+在父仓库main基线f30feb279567bf74a1a5abcb15f51c257c467377、Solution
+release/v4.0.1-mybot基线48a1c39a2fec974b77b4036ecc1bf93286265b67上，先独立同步SDK，
+UI调整留待该阶段提交之后。AVDK固定f699c50f2ee72e7ca014c8f009e0d40f1eeb059a。
+
+SDK完整include/src从064397882187a242be25a525a91df83d353b78bb更新为远端main的
+e7793eba88f721304dc00d421706d4d788b81a43（版本1.2.0），共58个文件，保留原有已声明
+HTTPS请求/响应body日志补丁。除src/support/mybot_http_client.c外逐文件与所选上游一致；
+聚合SHA256为fb7bd88a4d191e3b341c54d8a993b70b4a7b7ea3bd4632411f7899156015fa67。
+构建注册新增src/core/mybot_device_command.c，继续由SDK实现命令解析和执行。
+
+DeviceCommand v1支持音量设置/增减、播放静音及HAPPY/SAD/ANGRY/SURPRISED四种情绪，
+保留发送方、频道、会话、代次校验以及最近16个不同command ID的FIFO去重；issued_at和
+expires_at可省略或提供但不参与时钟/有效期校验，不引入UTC依赖。绑定轮询与停止通知走
+后台服务队列，本地RTC/媒体停止和状态发布先于停止HTTP通知。
+
+本阶段不修改旧硬件UI渲染器、音频、按键、视频、电源、GPIO或分区，不迁入R2风格及场景
+策略。旧状态卡片仍处理声纹与阶段bit 0-3，忽略新增情绪bit 4-7，后续UI阶段再接入。
+AVDK、AOSL和RTSA构建输入保持原版本。
+
+工程clean后AP/CP完整编译及组合打包通过，日志为/tmp/mybot-main-sdk-sync-build.log。
+AP Flash为1,945,676字节、静态RAM为155,916字节、DTCM为35,744字节。
+2026-10-16 15:26生成的build/bk7259/mybot/package/all-app.bin为3,453,024字节，
+SHA256为496915e16230ae62bbcff6825c2389e417026c2f2fd0bf3e4fadd28dd92a42bd。
+
+逐文件核对确认audio、key、video、usr_gpio及defconfig与旧硬件基线一致，LCD渲染器及
+整个display目录无差异；生成配置仍为JD9855、ADC_KEY、VIDEO=y、5 fps。
+AVDK仍固定f699c50f且工作树干净。此次仅完成SDK及构建验证，新的命令和会话行为仍待真机回归。
