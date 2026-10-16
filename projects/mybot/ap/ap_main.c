@@ -15,6 +15,8 @@
 #include <bk7259_factory_reset.h>
 #include <bk7259_key.h>
 #include <bk7259_lcd.h>
+#include <bk7259_gimbal.h>
+#include "bk7259_gimbal_cli.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -192,6 +194,9 @@ static void mybot_factory_reset_loop(bool requested)
             show_factory_reset(BK7259_FACTORY_RESET_FAILED);
             continue;
         }
+        if (bk7259_gimbal_center_wait(3000) < 0) {
+            BK_LOGW(TAG, "gimbal centering unavailable before factory reset\r\n");
+        }
         if (bk7259_factory_reset_disconnect_network() < 0) {
             BK_LOGE(TAG, "factory reset deferred: network teardown has not completed\r\n");
             show_factory_reset(BK7259_FACTORY_RESET_FAILED);
@@ -259,6 +264,9 @@ static int mybot_run(void)
         return -1;
     }
     s_display_prepared = true;
+    if (bk7259_gimbal_cli_init() != 0) {
+        BK_LOGW(TAG, "gimbal CLI registration failed\r\n");
+    }
     mybot_log_state_transition(&last_state, &state_valid);
 
     int reset_pending = bk7259_factory_reset_pending();

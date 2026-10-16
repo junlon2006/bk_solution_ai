@@ -2,6 +2,9 @@
 #ifndef BK7259_EXPRESSION_H_
 #define BK7259_EXPRESSION_H_
 
+/* Shared by the renderer and the display owner's expression timing policy. */
+#define BK7259_EXPRESSION_TRANSITION_MS 250U
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -46,7 +49,9 @@ int bk7259_expression_from_name(const char *name, bk7259_expression_t *expressio
  * Overrides are allowed only on READY/IN_CONVERSATION face pages, and are
  * cleared by a workflow screen change or clear_expression(). Factory reset
  * and operating guidance retain priority. Return 0 on acceptance, -1 on
- * invalid ID or when the prepared display cannot accept a face request. */
+ * invalid ID or when the prepared display cannot accept a face request.
+ * Repeating this local override is a no-op. SDK MCP emotion render calls
+ * use a separate one-shot path and replay even when the ID is unchanged. */
 int bk7259_lcd_set_expression(bk7259_expression_t expression);
 int bk7259_lcd_clear_expression(void);
 

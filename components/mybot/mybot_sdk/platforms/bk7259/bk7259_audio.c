@@ -28,7 +28,7 @@
 #define MYBOT_AUDIO_BLOCK_BYTES 640U
 #define MYBOT_AUDIO_POOL_BYTES (MYBOT_AUDIO_BLOCK_BYTES * 6U)
 #define MYBOT_AUDIO_IO_TIMEOUT_MS 25
-#define MYBOT_CAPTURE_DEVICE_BLOCKS 4
+#define MYBOT_CAPTURE_DEVICE_BLOCKS 2
 #define MYBOT_PLAYBACK_RAW_BLOCKS 8
 #define TAG "mybot_audio"
 
@@ -478,23 +478,18 @@ static int capture_init(void **out_ctx, int rate, int channels, int bits) {
     }
 
     stage = "microphone";
-    /* ADC0/ADC1 are analog microphones; ADC2 carries the HT6872 reference.
-     * All three lanes ride the ADC stream, without an appended digital ref. */
+    /* Match the new beken_robot_r2 analog capture path: all three ADCs are
+     * microphone inputs, with an additional hardware playback-reference lane. */
     onboard_mic_stream_cfg_t mic_cfg = DEFAULT_ONBOARD_MIC_ADC_STREAM_CONFIG();
     mic_cfg.adc_cfg.chl_num = MYBOT_CAPTURE_ADC_CHANNELS;
     mic_cfg.adc_cfg.sample_rate = MYBOT_AUDIO_RATE;
-    mic_cfg.adc_cfg.aec_en = 0;
-    for (unsigned int channel = 0; channel < 2; ++channel) {
+    mic_cfg.adc_cfg.aec_en = 3;
+    for (unsigned int channel = 0; channel < MYBOT_CAPTURE_ADC_CHANNELS; ++channel) {
         mic_cfg.adc_cfg.chl_cfg[channel].bits = MYBOT_AUDIO_BITS;
         mic_cfg.adc_cfg.chl_cfg[channel].dig_gain = 16.0f;
         mic_cfg.adc_cfg.chl_cfg[channel].ana_gain = 20;
         mic_cfg.adc_cfg.chl_cfg[channel].adc_mode = AUD_ADC_MODE_DIFFEN;
     }
-    /* The amplifier reference already has sufficient level at unity gain. */
-    mic_cfg.adc_cfg.chl_cfg[2].bits = MYBOT_AUDIO_BITS;
-    mic_cfg.adc_cfg.chl_cfg[2].dig_gain = 0.0f;
-    mic_cfg.adc_cfg.chl_cfg[2].ana_gain = 0;
-    mic_cfg.adc_cfg.chl_cfg[2].adc_mode = AUD_ADC_MODE_DIFFEN;
     mic_cfg.dmic_en = 0;
     mic_cfg.frame_size = MYBOT_AUDIO_BLOCK_BYTES;
     mic_cfg.out_block_size = MYBOT_AUDIO_BLOCK_BYTES;
@@ -503,33 +498,33 @@ static int capture_init(void **out_ctx, int rate, int channels, int bits) {
     mic_cfg.ch_bitmap = ONBOARD_MIC_ADC_ACTIVE_CH_0_BIT |
                         ONBOARD_MIC_ADC_ACTIVE_CH_1_BIT |
                         ONBOARD_MIC_ADC_ACTIVE_CH_2_BIT;
-    mic_cfg.hw_ref_ch = AUD_ADC_CHL_2;
+    mic_cfg.hw_ref_ch = ONBOARD_MIC_HW_REF_CH_NONE;
     ctx->device = onboard_mic_stream_init(&mic_cfg);
     if (!ctx->device ||
         audio_element_set_event_callback(ctx->device, discard_audio_event, NULL) != BK_OK) {
         goto fail;
     }
 
-    MYBOT_LOGI(TAG, "capture geometry: ADC0/ADC1=MIC gain=20+16 dB, ADC2=REF gain=0+0 dB, DMIC=0 ADC_aec=0");
+    MYBOT_LOGI(TAG, "capture geometry: R2 analog ADC0/ADC1/ADC2=MIC gain=20+16 dB, DMIC=0 ADC_aec=3 appended REF");
 
     stage = "aec";
     aec_v3_algorithm_cfg_t aec_cfg = DEFAULT_AEC_V3_ALGORITHM_CONFIG();
     aec_cfg.aec_cfg.mode = AEC_MODE_HARDWARE;
-    aec_cfg.aec_cfg.aec_loop = AEC_HW_REF_IN_CHANNEL;
-    aec_cfg.aec_cfg.ref_ch = AUD_ADC_CHL_2;
+    aec_cfg.aec_cfg.aec_loop = AEC_HW_REF_APPEND;
+    aec_cfg.aec_cfg.ref_ch = AEC_REF_CH_DEFAULT;
     aec_cfg.aec_cfg.adc_ch_num = MYBOT_CAPTURE_ADC_CHANNELS;
     aec_cfg.aec_cfg.ns_type = NS_TRADITION;
-    aec_cfg.dual_ch = 1;
+    aec_cfg.dual_ch = 2;
     aec_cfg.vad_cfg.vad_enable = 0;
     aec_cfg.out_block_size = MYBOT_AUDIO_BLOCK_BYTES;
     aec_cfg.out_block_num = MYBOT_CAPTURE_DEVICE_BLOCKS;
     aec_cfg.multi_in_port_num = 0;
     aec_cfg.multi_out_port_num = 0;
-    /* The main mono output includes AEC, dual-mic processing and NS.
-     * Leave the unused EC side-output buffer disabled (ec_only_output=0). */
-    aec_cfg.aec_cfg.ec_only_output = 0;
-    aec_cfg.aec_cfg.multi_output_use_ec_out = 0;
-    MYBOT_LOGI(TAG, "AEC geometry: in-channel ref=2 adc_channels=3 dual_mic=1 NS=traditional VAD=0 delay=%u frame=%d blocks=%d",
+    /* Match the reference DSP options; MyBot consumes the main mono output.
+     * Its ASR/UI side-output ports and direction callbacks are not needed. */
+    aec_cfg.aec_cfg.ec_only_output = 1;
+    aec_cfg.aec_cfg.multi_output_use_ec_out = 1;
+    MYBOT_LOGI(TAG, "AEC geometry: R2 appended REF trimic=1 NS=traditional VAD=0 EC_out=1 delay=%u frame=%d blocks=%d",
                (unsigned int)aec_cfg.aec_cfg.delay_points,
                aec_cfg.out_block_size, aec_cfg.out_block_num);
     ctx->aec = aec_v3_algorithm_init(&aec_cfg);
@@ -575,15 +570,15 @@ static int capture_init(void **out_ctx, int rate, int channels, int bits) {
     aud_uplink_caps_t caps = {0};
     if (audio_element_get_input_uplink_caps(ctx->aec, &caps) != BK_OK ||
         !caps.valid || caps.version != AUD_UPLINK_CAPS_VERSION ||
-        caps.ch_bitmap != mic_cfg.ch_bitmap || caps.aec_en != 0 ||
-        caps.ref_ch != AUD_ADC_CHL_2) {
+        caps.ch_bitmap != mic_cfg.ch_bitmap || caps.aec_en != 1 ||
+        caps.ref_ch != AUD_UPLINK_REF_CH_AUTO) {
         MYBOT_LOGE(TAG, "capture layout rejected: valid=%u version=%u bitmap=0x%x adc_aec=%u ref_lane=%u",
                    (unsigned int)caps.valid, (unsigned int)caps.version,
                    (unsigned int)caps.ch_bitmap, (unsigned int)caps.aec_en,
                    (unsigned int)caps.ref_ch);
         goto fail;
     }
-    MYBOT_LOGI(TAG, "capture layout verified: lanes=3 mic=[0,1] ref=2, output=16000 Hz mono S16");
+    MYBOT_LOGI(TAG, "capture layout verified: bitmap=0x7 lanes=4 mic=[0,1,2] appended_ref=3, output=16000 Hz mono S16");
     stage = "raw_port";
     ctx->raw_port = audio_element_get_input_port(ctx->raw);
     if (!ctx->raw_port) {

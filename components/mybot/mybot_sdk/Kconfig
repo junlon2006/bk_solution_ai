@@ -19,6 +19,17 @@ menu "MyBot BK7259 platform"
             The fixed process-gray theme runs in the existing product-owned
             UI thread. Disabling this keeps all 23 expressions static.
 
+    config MYBOT_GIMBAL
+        bool "Enable EB521 gimbal control"
+        default y
+        depends on UART && USR_GPIO_CFG_EN
+        select UART2
+        help
+            Enable EB521 control and manual gimbal_cmd/gimbal_scene commands
+            using the R2 board's UART2 connection (GPIO2 TX, GPIO3 RX, 115200
+            baud, 8N1). Motion commands are serialized and manual scenes return
+            to center when complete. MCP emotion commands update only the LCD.
+
     config MYBOT_VIDEO
         bool "Enable MyBot encoded video uplink"
         default n

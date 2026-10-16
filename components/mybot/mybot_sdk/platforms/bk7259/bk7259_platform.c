@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "mybot_bk7259_platform.h"
 #include "bk7259_ops.h"
+#include "bk7259_gimbal.h"
 
 #include "bk7259_platform_log.h"
 #include <components/system.h>
@@ -29,6 +30,10 @@ int mybot_bk7259_platform_prepare(void) {
         bk7259_wifi_shutdown();
         bk7259_lcd_shutdown();
         return -1;
+    }
+    if (bk7259_gimbal_prepare() < 0) {
+        /* Optional actuator failure must not prevent voice/UI startup. */
+        MYBOT_LOGW(TAG, "gimbal preparation failed; continuing without motion");
     }
     s_prepared = true;
     MYBOT_LOGI(TAG, "platform prepared");
@@ -70,6 +75,10 @@ void mybot_bk7259_platform_shutdown(void) {
     MYBOT_LOGI(TAG, "platform shutting down");
     bk7259_key_shutdown();
     bk7259_wifi_shutdown();
+    if (bk7259_gimbal_shutdown() < 0) {
+        MYBOT_LOGE(TAG, "gimbal shutdown incomplete; retaining platform resources");
+        return;
+    }
     bk7259_lcd_shutdown();
     s_prepared = false;
     MYBOT_LOGI(TAG, "platform shut down");

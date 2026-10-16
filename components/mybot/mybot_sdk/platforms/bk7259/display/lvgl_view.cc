@@ -24,7 +24,7 @@ constexpr size_t kStateLineCapacity =
     BK7259_LCD_STATE_CAPACITY + sizeof("> state: ") + sizeof(" | vp:pending") - 2;
 constexpr uint32_t kSupportedIndicators =
     MYBOT_LCD_INDICATOR_VP_REGISTERED | MYBOT_LCD_INDICATOR_SERVER_STATE_MASK;
-constexpr uint32_t kTransitionMs = 250;
+constexpr uint32_t kTransitionMs = BK7259_EXPRESSION_TRANSITION_MS;
 constexpr uint32_t kTransitionTickMs = 50;
 constexpr uint32_t kCursorMs = 500;
 constexpr uint32_t kBackground = 0x050708;
@@ -559,12 +559,11 @@ void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *ssid
         return;
     }
     update_runtime_terminal(normalized, copied_status);
-    /* Status-only updates preserve expression overrides and both animation clocks. */
-    if (workflow_changed && (content->screen == MYBOT_LCD_SCREEN_READY ||
-                             content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION)) {
-        show_face(content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION ? BK7259_EXPRESSION_GREETING
-                                                                      : BK7259_EXPRESSION_NEUTRAL);
-    } else if (workflow_changed) {
+    /* The display owner chooses face expressions after updating this snapshot.
+     * Workflow/status changes never insert an intermediate default face or
+     * restart either expression clock. Guidance still replaces a visible face. */
+    if (workflow_changed && content->screen != MYBOT_LCD_SCREEN_READY &&
+        content->screen != MYBOT_LCD_SCREEN_IN_CONVERSATION) {
         show_guide(kScreens[content->screen]);
         if (provisioning) {
             std::memcpy(s_view.provisioning_ssid, copied_ssid, sizeof(s_view.provisioning_ssid));
@@ -593,11 +592,23 @@ void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *ssid
 }
 
 int bk7259_lvgl_view_show_expression(bk7259_expression_t expression) {
-    if (!s_view.root || !s_view.face_visible || s_view.factory_reset ||
+    if (!s_view.root || !s_view.has_content || s_view.factory_reset ||
+        (s_view.previous.screen != MYBOT_LCD_SCREEN_READY &&
+         s_view.previous.screen != MYBOT_LCD_SCREEN_IN_CONVERSATION) ||
         expression < BK7259_EXPRESSION_NEUTRAL || expression >= BK7259_EXPRESSION_COUNT)
         return -1;
-    if (expression != s_view.expression)
+    if (!s_view.face_visible || expression != s_view.expression)
         show_face(expression);
+    return 0;
+}
+
+int bk7259_lvgl_view_replay_expression(bk7259_expression_t expression) {
+    if (!s_view.root || !s_view.has_content || s_view.factory_reset ||
+        (s_view.previous.screen != MYBOT_LCD_SCREEN_READY &&
+         s_view.previous.screen != MYBOT_LCD_SCREEN_IN_CONVERSATION) ||
+        expression < BK7259_EXPRESSION_NEUTRAL || expression >= BK7259_EXPRESSION_COUNT)
+        return -1;
+    show_face(expression);
     return 0;
 }
 

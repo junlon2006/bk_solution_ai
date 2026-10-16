@@ -105,6 +105,10 @@ if(CONFIG_MYBOT_VIDEO)
     list(APPEND platform_srcs platforms/bk7259/bk7259_video.c)
 endif()
 
+if(CONFIG_MYBOT_GIMBAL)
+    list(APPEND platform_srcs platforms/bk7259/bk7259_gimbal.c)
+endif()
+
 set(mybot_priv_requires
     mybot_aosl
     audio_pipeline

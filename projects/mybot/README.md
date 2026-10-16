@@ -9,8 +9,9 @@ device-service control, bidirectional RTC audio, local provisioning and UI, and
 optional one-way encoded video uplink in one conversation. Video is enabled by default.
 
 The `release/v4.0.1-mybot-r2` branch targets the Yunqu V1.0 R2 board with a
-GC9503CV MIPI LCD, KEY1/GPIO47, and dual analog microphones plus an amplifier
-feedback channel for hardware AEC. Its normal UI follows the simulator's
+GC9503CV MIPI LCD and KEY1/GPIO47. Audio currently follows the paired Solution/AVDK
+under `mcp-resource/new`, with three analog inputs and an appended digital AEC reference.
+Its normal UI follows the simulator's
 process-gray skin and pixel-glasses face.
 
 The vendored SDK now follows `main` commit
@@ -22,8 +23,32 @@ in FIFO order: duplicates do not refresh their position, new IDs evict the
 oldest, and evicted IDs may execute again. MCP volume set/adjust routes through
 the existing volume adapter and mute silences speaker PCM; the command path
 still needs hardware validation. Existing voiceprint/phase indicators remain
-supported; the new emotion bits 4-7 are ignored by this view. MCP mapping to
-local expressions and UART/gimbal actions remains unimplemented.
+supported; one-shot emotion bits 4-7 select local LCD expressions without
+triggering EB521 UART/gimbal movement.
+
+The current audio comparison build sets `# CONFIG_MYBOT_GIMBAL is not set` in the
+AP defconfig. The gimbal module, its UART2 pin mapping and CLI registration are
+disabled. The following commands are available only after enabling
+`CONFIG_MYBOT_GIMBAL=y` and rebuilding.
+
+Enter `ap_cmd gimbal_cmd` on the log console to send one manual UART2 command.
+Each accepted call advances through pan -30 degrees, pitch down 10 degrees,
+pitch up 20 degrees and pan right 10 degrees relatively, then starts again at
+the first command. TX/RX bytes and CRC-checked ACKs are logged. A busy call does
+not advance the list. After a timeout, another call sends the next command;
+commands are never retried automatically. The first manual call suspends
+automatic centering until platform restart; MCP expressions independently
+continue to update the LCD.
+
+Use `ap_cmd gimbal_scene happy`, `sad`, `angry` or `surprised` to execute one
+complete existing gimbal trajectory and return to center. Without a name,
+`ap_cmd gimbal_scene` selects the next scene in that order, advancing only when
+the request is queued. Each scene first reads fresh controller position and
+checks that homing has finished and both axes are idle; it does not move when
+status feedback is missing or invalid. Scene and raw commands share one UART
+owner and return busy while another operation or conversation is active.
+Logs report scene start, completion, cancellation or failure. No timed commands
+are sent.
 
 Binding-status polls and stop notifications now run on a separate `service_mpq`,
 so slow background requests do not delay local hangup or the next conversation
@@ -162,26 +187,45 @@ it does not erase the whole EasyFlash environment.
 
 ## 6. R2 Audio and Display
 
-Capture reads three differential analog ADC lanes:
+The current audio configuration follows the paired Solution and AVDK in `mcp-resource/new`.
+Capture enables three differential analog ADC inputs (`ch_bitmap=0x7`, `chl_num=3`),
+and `adc_cfg.aec_en=3` appends a digital playback reference:
 
-| ADC | Signal | Analog gain | Digital gain |
+| Lane | Algorithm input | Analog gain | Digital gain |
 | --- | --- | --- | --- |
-| ADC0 | Microphone 1 | 20 | 16 dB |
-| ADC1 | Microphone 2 | 20 | 16 dB |
-| ADC2 | HT6872 amplifier feedback | 0 | 0 dB |
+| 0 / ADC0 | Microphone input 1 | 20 dB | 16 dB |
+| 1 / ADC1 | Microphone input 2 | 20 dB | 16 dB |
+| 2 / ADC2 | Microphone input 3 | 20 dB | 16 dB |
+| 3 / appended | Digital playback reference | Not applicable | Not applicable |
 
-The ADC stream disables digital microphones and the appended digital reference
-(`dmic_en=0`, `adc_cfg.aec_en=0`). AEC is enabled in the downstream algorithm:
+DMIC is disabled and `hw_ref_ch=NONE` (`255`); no ADC lane is an in-channel reference.
+Capture uses 640-byte/20 ms blocks and two blocks of buffering.
 
 ```text
-onboard_mic_stream_v2 (ADC0 + ADC1 + ADC2)
-  -> aec_v3_algorithm_v2 (hardware AEC, in-channel reference ADC2)
+onboard_mic_stream_v2 (ADC0 + ADC1 + ADC2 + appended digital reference)
+  -> aec_v3_algorithm_v2 (hardware AEC, APPEND/AUTO reference, three-microphone processing)
   -> raw stream -> 16 kHz mono signed 16-bit PCM -> RTC uplink
 ```
 
-The AEC stage uses three ADC channels, `dual_ch=1`, traditional noise suppression,
-and VAD disabled. Its main output includes AEC, dual-microphone processing, and
-noise suppression. Speaker playback uses the onboard DAC stream and active-high
+AEC uses `adc_ch_num=3`, `dual_ch=2`, traditional noise suppression, VAD disabled
+(`vad_enable=0`), `ec_only_output=1`, and `multi_output_use_ec_out=1`.
+The paired AVDK supplies three-microphone deinterleaving, the trimic flag and SSL3
+support. Its processing path still calls `aec_proc`; the Solution comment saying
+AEC is temporarily disabled is stale. The four required AVDK audio files
+(wrapper, configuration header, algorithm header and AP algorithm library) are
+updated from this reference, together with the AP library checksum manifest
+computed from the actual local library set. Library verification remains enabled.
+No ASR output port or UI direction callback is added.
+
+GPIO12 follows the reference's output/pull-down configuration for discharging the
+ADC internal comparator. GPIO34/35 retain the supplied secondary-function-disabled
+GPIO-output declarations and remain HIGH-Z at startup. GPIO2/3 UART2 mapping is
+enabled only with `CONFIG_MYBOT_GIMBAL=y`; the current comparison build disables
+the gimbal module, mapping and CLI. GPIO47 remains the pulled-up conversation key.
+There are no runtime capture-level logs. Actual three-input capture and AEC
+behavior still require device testing.
+
+Speaker playback uses the onboard DAC stream and active-high
 GPIO50 amplifier enable. Volume changes apply speaker digital gain and save
 `mybot.volume.v1` synchronously; failures retry on a later set or adapter
 destruction. This board has no volume keys.
@@ -207,7 +251,10 @@ and a smile.
 | --- | --- |
 | Startup, provisioning, authentication, or pairing | Bilingual operational guidance; pairing codes are entered in the web console |
 | Actual SDK `READY` | Neutral idle face by default |
-| Entering and remaining in `IN_CONVERSATION` | Greeting face by default |
+| Entering `IN_CONVERSATION` | SURPRISED for 300 ms after the entering transition, then the latest server phase |
+| Conversation LISTENING | LISTENING face |
+| Conversation THINKING | THINKING face; PROCESSING after three continuous seconds |
+| Conversation SPEAKING or no active phase | NEUTRAL face |
 | Hangup returning to `READY` | Neutral idle face |
 | Network/startup error | Operational error guidance |
 | Factory reset | Restoring, failed, or rebooting page, with priority over SDK display updates |
@@ -230,9 +277,10 @@ then listening when several are active; no active phase falls back to
 `in_conversation`. `vp:ok` means a successful voiceprint notification was
 received in the current session; `vp:pending` means it is not yet confirmed.
 Phase and voiceprint appear only when the runtime state and page are both
-`IN_CONVERSATION`. Status changes update only text, retaining the current face
-and any expression override without restarting its transition or showing a
-toast. SLEEP artwork does not turn the actual state into `standby`.
+`IN_CONVERSATION`. Voiceprint updates affect text; phase updates also select the
+underlying automatic face. Repeated phase updates do not reset its animation or
+the three-second thinking clock. An active explicit expression is retained;
+no toast is shown. SLEEP artwork does not turn the actual state into `standby`.
 The `</>` signature and cursor on the last row remain. This UI does not control
 gimbal movement.
 
@@ -255,7 +303,7 @@ ANNOYED, REFUSE, PROCESSING, ERROR, SLEEP
 ```
 
 The independent `include/bk7259_expression.h` module exposes local display
-requests, ready for later command integration:
+requests:
 
 ```c
 #include "bk7259_expression.h"
@@ -267,18 +315,31 @@ int show_happy(void) {
 
 `bk7259_expression_from_name()` converts an exact simulator name while ignoring
 ASCII letter case; `bk7259_expression_name()` returns its stable uppercase
-name. `bk7259_lcd_clear_expression()` restores NEUTRAL or GREETING for the current
-workflow screen. Set/clear return `0` when the owner accepts the copied request,
+name. `bk7259_lcd_clear_expression()` restores the latest automatic face for the
+current workflow and server phase. Set/clear return `0` when the owner accepts the copied request,
 not when scanout completes, and `-1` for an invalid expression or an unavailable
 face page. They use the existing LCD snapshot lock and mailbox, never caller-side
 LVGL. Requests are accepted only on prepared, running `READY`/`IN_CONVERSATION`
 pages; provisioning, reset, and shutdown reject them. Workflow screen changes
-clear overrides, indicator-only updates preserve them, and requesting the same
-active expression does not replay its transition.
+clear overrides. A local override persists through phase updates until cleared,
+the workflow changes, or a later MCP emotion replaces it. Requesting the same
+local expression does not replay its transition.
 
-The additional 21 expressions do not cycle automatically. MCP/RTM command
-mapping and UART actions are outside this change. Selecting the ERROR or SLEEP
-artwork does not enter the SDK's error state or suspend the hardware.
+MCP HAPPY/SAD/ANGRY/SURPRISED select HAPPY/SAD/ANNOYED/SURPRISED on the LCD and
+hold for 2 s/3 s/1.2 s/0.8 s. With animations enabled, the entering 250 ms
+transition is additional to each hold, including the opener's 300 ms hold.
+With animations disabled, only the hold applies. The hold starts when the UI
+owner displays the request. A new MCP command replaces the foreground and
+replays even the same name; ordinary renders do not restart or cancel it.
+At expiry the UI restores the latest automatic face, including PROCESSING if
+THINKING has continued for three seconds in the background. Leaving the
+conversation cancels its foreground and deadlines; operational guidance and
+factory reset always take precedence.
+
+All expressions are LCD-only and do not drive the gimbal; manual UART CLI
+control remains independent when `CONFIG_MYBOT_GIMBAL=y` and is disabled in the
+current audio comparison build. There is no automatic demo cycling. Selecting
+the ERROR or SLEEP artwork does not enter the SDK's error state or suspend the hardware.
 
 The simulator's 1024x896 artwork is scaled uniformly by 9/16 to a virtual
 576x504 area at logical `(32,-12)` on the 640x480 display. The cropped top and
@@ -349,7 +410,8 @@ configuration cannot retain stale values.
 ## 8. Real-Device Validation
 
 The user confirmed R2 LCD bring-up, conversation start/stop without blanking,
-audio/AEC, and the factory-reset feature work on hardware.
+the previous dual-analog-microphone/ADC2-reference audio/AEC, and factory reset
+work on hardware. The current three-input audio configuration awaits device testing.
 The user confirmed basic process-gray pixel-glasses rendering. The restored
 four-line layout and complete 23-expression set await hardware validation.
 The checklist below describes regression coverage; it does not imply every
@@ -367,10 +429,12 @@ Video-specific checks require a build with `CONFIG_MYBOT_VIDEO=y`.
 - [ ] End, restart, and interrupt conversations repeatedly; confirm the encoder, frame pool, camera, and RTC resources stop and restart cleanly.
 - [ ] Confirm conversation/video stop holds GPIO30 in reset while GPIO27/1.2 V and GPIO29/2.8 V remain enabled; only full platform shutdown releases the board rails.
 - [ ] Short press/release starts and stops a conversation without blanking the LCD.
-- [ ] Verify neutral idle after actual `READY`, greeting for the entire conversation, and neutral immediately after hangup.
+- [ ] Verify NEUTRAL after actual `READY`, a 300 ms SURPRISED opener plus the entering transition, then the latest phase face; hangup returns to neutral.
+- [ ] Verify LISTENING, THINKING → PROCESSING after three continuous seconds, and NEUTRAL during SPEAKING or no active phase; repeated updates must not reset the thinking clock.
 - [ ] Verify four terminal rows, lowercase expression names, actual SDK state, and session-scoped phase/voiceprint text; compare all 23 faces and their motion with the simulator.
-- [ ] Exercise local set/clear requests, invalid names/IDs, indicator updates, workflow changes, and reset priority; verify no automatic expression cycling.
-- [ ] Verify RTM voiceprint/listening/thinking/speaking updates refresh the third row only during a real conversation, do not show overlays, and do not restart face transitions; hangup removes session fields.
+- [ ] Exercise persistent local set/clear, invalid names/IDs, phase updates, workflow changes, and reset priority; clear must restore the latest automatic face.
+- [ ] Verify MCP holds of 2 s/3 s/1.2 s/0.8 s plus entering transitions, same-name replay, replacement of a local override, and restoration of the latest phase at expiry; ordinary updates must not restart the hold or send gimbal motions.
+- [ ] Verify phase/voiceprint text appears only during a real conversation, voiceprint-only updates preserve the face, and hangup removes session fields and cancels pending expression deadlines.
 - [ ] Verify both languages, web-console pairing instructions, round-bezel clearance, and factory-reset display priority.
 - [ ] A hold below 5 seconds performs only the state-appropriate short action on release; a 5-second hold resets once and suppresses that action.
 - [ ] Hold the key across reboot, then release; confirm a new gesture is required before another reset.

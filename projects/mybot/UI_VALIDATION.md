@@ -618,6 +618,27 @@ UI 工作线程退出、显示关闭和回调等待均有超时；通知信号�
 与声纹通知、反复停止/启动 SDK、恢复时断电和失败重试，以及同时音视频时的动画流畅度、
 HSRAM 余量、线程栈高水位和长时间运行情况。
 
+## 2026-10-13 HTTP 请求/响应日志
+
+扩展已声明的 `src/support/mybot_http_client.c` 诊断日志补丁，HTTP 与 HTTPS 均在
+NOTICE 级别打印请求方法、URL、请求正文、响应状态码和响应正文，重定向额外打印
+`Location`。GET 的空正文也明确输出。连接、发送、接收和解析失败记录各自阶段。
+正文按最多320字节分段并保留 UTF-8 字符边界，包含偏移与总长度；响应头不输出认证或
+Cookie 信息。当前 AOSL 日志缓冲为8 KiB，分段也使更长响应不会超过单条日志容量。
+HTTP 开关、TLS 校验和重定向处理行为保持原有配置。
+
+SDK 上游基线仍为 `7a10696ff27dd947da0558104da6c5414929ea09`；补丁及第三方声明同步记录。
+排除用户原有 RTC NOTICE 日志两行本地修改后，锁定 `include/src` 摘要更新为
+`86b9cb0a8b2ed1b8b1c92d638f92c3193a62f42fe43abb8076f0a56501ad7aa8`。
+包含该用户本地修改的工作树摘要为
+`4462218b7f9eb8fee9bbffa0c54692a7818642f5b9b72dbc2508ccbd989f7f4c`，不把这两行
+未声明的本地调试调整算入可提交快照。现有云台实现及本地 HTTP 测试配置均保留。
+
+新增日志代码的边界/生命周期复核及 `git diff --check` 通过；在原工程完成 AP/CP 编译和
+打包，产物为 `build/bk7259/mybot/package/all-app.bin`。AP Flash 使用1,910,924字节，
+CP Flash 使用1,295,948字节。AVDK 工作树保持干净；服务端的实际重定向目标以烧录后
+输出的 `response Location` 为准。
+
 ## 2026-10-13 SDK 同步到 e7793eb
 
 已获取远端 `main` 的 `e7793eba88f721304dc00d421706d4d788b81a43`（PR #113，SDK仍为
@@ -664,3 +685,292 @@ socket自身的 `SO_ERROR` 分类读写结果，直接进行有界 `select`，�
 本次基于Solution `3adda162bfc8eccab1e68ce4e142814869ee2e5e` 工作区完成，已有云台等
 硬件修改保留，未自动提交或更新父仓库gitlink。权威SDK参考仓库及目标AOSL均未修改。
 测试与构建日志位于 `/tmp/mybot-sdk-refresh.qc2Rwv/`，不属于固件构建输入。
+
+## 2026-10-14 EB521 UART2 接线适配
+
+依据 R2 工程及 `mcp-resource/usr_gpio_cfg.diff`，舵机由 AP 的 UART2 控制，GPIO2 为 TX、
+GPIO3 为 RX，两脚均关闭内部上下拉。串口为115200、8N1、无流控、无DMA。
+Kconfig选择UART2，初始化、收发、IRQ回调和销毁均使用UART2及其GPIO功能枚举；
+正式启动日志为 `UART2 ready: GPIO2 TX/GPIO3 RX, 115200 8N1`。
+
+四个MCP动作、完成确认、动作结束及挂断回中继续使用现有逻辑。原工程clean后完成AP/CP
+编译和打包，固件为 `build/bk7259/mybot/package/all-app.bin`。生产主机测试普通及
+ASAN/UBSAN均通过6组，生成配置确认 `CONFIG_UART2=1`；实际云台动作待烧录验证。
+AVDK及MyBot/AOSL快照未修改。
+
+## 2026-10-14 UART2 手动命令控制
+
+AP命令 `ap_cmd gimbal_cmd` 每次只投递一条固定命令，按水平左转30°、俯仰下转10°、
+俯仰上转20°、水平相对右转10°依次循环。每次受理推进一次，忙时不推进；
+TX/RX由原UART2工作线程处理，正式日志打印完整发送帧、原始接收字节和CRC校验结果。
+应答等待最多1秒，失败不重传、不退出工作线程，下一次显式调用仍可发送下一条。
+
+首次手动调用进入独占手动控制，暂停自动查询、回中和MCP动作至平台重启或重新准备。
+已有普通运动在途、会话中或已有命令待处理时拒绝调用。启动中的状态查询有界结束后
+切换，不要求先完成状态查询初始化。关闭会取消未发送命令，并复用原资源释放与失败保留规则。
+自动定时发送逻辑、测试配置和相应用例已删除。
+
+原工程clean后完成AP/CP编译和打包，产物为 `build/bk7259/mybot/package/all-app.bin`；
+最终ELF确认CLI注册和单条投递接口已链接，旧定时测试符号及配置无残留。
+原6组生产回归及4组手动命令回归，在普通与ASAN/UBSAN环境均通过。AVDK及SDK/AOSL
+快照未修改；新的CLI交互待设备烧录验证。
+
+## 2026-10-15 CLI 执行完整表情动作
+
+新增 `ap_cmd gimbal_scene [happy|sad|angry|surprised]`，每次受理一个完整表情动作。
+不带参数时依次循环，有参数时指定表情；忙或不可用不推进游标。原单帧 `gimbal_cmd` 保留。
+两个入口共用UART2工作线程及手动会话，不增加线程或定时发送，也不改变四套既有轨迹。
+
+完整动作开始前读取新E3，检查归零完成、两轴停止及角度范围（允许0.4°量化误差），
+再执行原 `play_scene()`，包含初始回中、表情轨迹及结束回中。状态缺失、无效或未就绪
+会打印 `CLI scene not started`，不发送运动帧；00应答仍只表示接受，完成继续由原状态
+确认逻辑验证。与原raw CLI一样，手动会话中MCP动作保持暂停至平台重启/重新准备。
+
+已有运动、单帧或完整动作在排队/运行时，另一CLI请求返回忙。关闭从停止接受新工作
+开始禁止新61/64，只允许63确认当前在途段，随后取消余下轨迹并按原规则释放资源；
+关闭等待失败保留资源供重试。正式日志记录排队、姿态同步、完成、取消或失败。
+
+普通及ASAN/UBSAN均通过14组native动作/生命周期测试与CLI注册、参数、游标测试；
+四套完整动作、raw后真实姿态同步、异常状态不发61、互斥及关闭窗口均已覆盖。
+原工程AP/CP编译打包通过，产物为 `build/bk7259/mybot/package/all-app.bin`；
+AP Flash为1,915,964字节，RAM为157,516字节。AVDK仍为
+`90aaf113d78ef875635fcc49587f80fd2a8ddadc`，Solution基线仍为
+`a9a7da4f28d0dc8fd86c58faf3095a3251ad4ff1`，修改留在工作区。
+本次核对选定SDK的PORTING/EMBEDDED契约及BK UART/GPIO接口，SDK/AOSL内容摘要仍匹配
+锁定记录，未修改依赖。现有旧边界脚本锁定旧版本/旧板配置，不能作为本R2工作树的通过证明。
+设备尚未反馈有效E3数据，完整动作效果需用户烧录验证；未将原单帧E1/00成功视为动作完成。
+
+## 2026-10-15 GPIO48 电源保持配置
+
+AP的GPIO默认初始化表首项增加GPIO48/HOLD，采用R2相同的GPIO输出、上拉、初始化启用配置。
+在 `bk_init` 的GPIO驱动初始化阶段实际输出高电平，早于产品任务及LCD初始化。
+最终AP ELF确认启动表由18条增至19条，首项GPIO48字段与R2一致；原工程AP/CP编译及
+打包通过，固件为 `build/bk7259/mybot/package/all-app.bin`，AVDK未修改。
+
+用户已确认R2参考固件也不能电池冷启动。本次仅补齐上电后的保持配置，待验证USB启动后
+拔掉USB是否仍能由电池维持运行；没有将这一配置视为解决无电源按键硬件的冷启动问题。
+
+## 2026-10-15 云台应答等待与CLI动作日志
+
+用户反馈happy仅移动少量后停止；两次有效E3查询从同步日志至动作开始约242/225 ms，
+接近原250 ms查询上限。旧运动等待也会在第一个250 ms空等待后判ACK超时。
+现将E3查询与运动ACK的独立应答期限设为1000 ms，250 ms仅为运动接收等待分片。
+运动总期限包含预计运动时间、ACK和状态应答预算，内部查询受剩余预算限制。
+仍只保留一个运动在途，未完成不推进，不重发可能已执行的运动。
+
+CLI完整动作逐事务打印TX/RX、丢弃的旧输入、目标/反馈角度、速度、耗时与失败采样点；
+原始RX每事务最多128字节。故障恢复的64/E4与63/E3也保留收发，便于区分最初失败和
+后续停止未确认。正常MCP动作不启用逐帧日志。
+
+普通与ASAN/UBSAN均通过14组native回归及CLI回调测试；新增300 ms ACK/E3延迟成功，
+以及ACK丢失但控制器执行时仍有界失败、无重发的覆盖。原工程AP/CP编译与打包通过。
+已复核选定SDK的完整PORTING/EMBEDDED文档、平台LCD合同和BK UART收发/ISR接口。
+AVDK仍固定90aaf113d且干净，Solution基线a9a7da4，SDK/AOSL实际摘要仍分别为
+fb7bd88a4d191e3b341c54d8a993b70b4a7b7ea3bd4632411f7899156015fa67与
+2e9fc3fa5571972fd31c1ab64546477a98550b6b210e38fec181c0f4daeae64e，与锁一致。
+旧boundary脚本因旧版本/旧LCD规则和扫描参考资料、native测试而失败，未计为通过。
+协议没有事务号，超时后才到达的同类型旧帧仍有歧义；新日志用于继续定位实机失败，
+未宣称已通过真实完整动作或消除了全部UART丢包原因。未提交。
+
+## 2026-10-15 云台最小控制周期40 ms
+
+happy/angry/surprised及回中的规划周期从20 ms改为最小40 ms，sad保留原50 ms。
+关键转折点前不足40 ms的尾段合并到前一段，保留原转折时间和动作总规划时长。
+happy主体由100段降为50段，两次回中各由14段降为7段，总规划时长仍为2.56秒。
+启动动作日志增加 `min_period=40ms`，收发日志及1000 ms应答期限继续保留。
+
+14组native回归及CLI测试通过，新增遍历检查最小段长、关键点和名义时长；
+原工程AP/CP编译打包通过，AP Flash为1,917,628字节，RAM为157,516字节。
+已读PORTING/EMBEDDED、LCD平台合同及UART/GPIO接口仍适用；SDK/AOSL摘要与锁一致，
+AVDK保持90aaf113d且干净，Solution基线仍为a9a7da4，未提交。实机节奏待本版烧录验证。
+
+## 2026-10-15 MCP表情仅更新LCD
+
+移除LCD的MCP一次性表情到 `bk7259_gimbal_request()` 的唯一调用，表情解析仅输出LCD
+枚举，继续保留四表情映射、同名表情重播及普通状态刷新不重播的语义。
+手动gimbal_cmd/gimbal_scene及既有会话互斥、挂断/关闭回中生命周期保留。
+Kconfig及中英文README同步说明MCP表情只渲染LCD。
+
+原工程AP/CP编译与打包通过，14组native及CLI回归通过。AP LCD对象的未解析云台引用
+仅剩 `bk7259_gimbal_set_conversation`，无表情动作请求；目标源码中该请求仅剩定义/声明。
+AP Flash为1,917,292字节，RAM为157,516字节。SDK/AOSL摘要仍与锁一致；AVDK固定
+90aaf113d且干净，Solution基线a9a7da4，修改留在工作区。已读PORTING/EMBEDDED和LCD
+合同继续适用，未修改SDK或依赖。实机MCP四表情与重复表情显示待烧录确认，未提交。
+
+## 2026-10-15 MyBot流程驱动LCD场景表情
+
+根据《表情设计》五、场景映射，READY显示NEUTRAL；首次进入IN_CONVERSATION显示
+SURPRISED保持300 ms，再按最新phase显示LISTENING、THINKING或NEUTRAL（SPEAKING及
+暂无phase）。同次THINKING连续3秒后显示PROCESSING，普通phase/VP/运行文本刷新不重置。
+仅使用现有公开LCD screen/indicator，未添加打断、任务结果、人体感应、电量或UTC推断。
+
+MCP前景HAPPY/SAD/ANNOYED/SURPRISED保持2000/3000/1200/800 ms，新请求替换旧请求，
+同名新请求重播；到期按最新基础phase恢复。保持时间从成功提交显示起，进入过渡250 ms
+另计；关闭动画时额外过渡为0。LOCAL覆盖保持至清除、页面切换或更新的显式请求，
+重复同LOCAL不重播。离开会话/SDK detach/恢复出厂/关闭清除前景与会话计时，旧表情不会复活。
+
+私有expression_policy由snapshot锁保护，publish逐次记录状态边沿，UI线程在现有最多50 ms
+等待循环中检查到期，即使无新SDK render也会推进。所有LVGL仍只由原UI owner调用，
+不新增线程、定时器、运行期分配或GCC原子操作。view不再插入硬编码GREETING，直接绘制
+owner选定表情；正式日志仅在表情/来源变化或重播时输出。MCP到舵机动作保持断开。
+
+13组、462断言native策略回归普通及ASAN/UBSAN通过，覆盖边界时刻、未渲染phase往返、
+MCP替换/重播/恢复、LOCAL保持、提交失败、动画关闭、工作流程切换与uint32时钟回绕。
+真实LVGL主机验证的中文、英文、动画关闭三配置均通过严格编译及ASAN/UBSAN，验证
+guide→指定脸、无中间GREETING、同ID不重启时钟、replay重启和factory优先级。
+测试入口为 `tests/expression_policy/run.sh`；目标完整构建命令仍为：
+
+```sh
+make -C bk_solution_ai/projects/mybot bk7259 SDK_DIR="$PWD/bk_avdk_smp"
+```
+
+原工程AP/CP编译及打包通过，产物为 `build/bk7259/mybot/package/all-app.bin`；
+AP Flash 1,917,788字节、RAM 157,548字节，比本次前分别增加496字节和32字节。
+已核对选定e7793eba88f721304dc00d421706d4d788b81a43的完整PORTING/EMBEDDED及LCD合同，
+SDK摘要fb7bd88a4d191e3b341c54d8a993b70b4a7b7ea3bd4632411f7899156015fa67、AOSL摘要
+2e9fc3fa5571972fd31c1ab64546477a98550b6b210e38fec181c0f4daeae64e仍与锁一致；
+AVDK固定90aaf113d78ef875635fcc49587f80fd2a8ddadc且干净，Solution基线
+a9a7da4f28d0dc8fd86c58faf3095a3251ad4ff1，工作区修改未提交。
+旧boundary脚本仍锁定旧版本/旧硬件规则，结果不作为本R2工作树的通过证明。
+尚未进行本次固件的实机状态表情验收。
+
+## 2026-10-15 新板ADC0直通诊断
+
+以下ADC0/ADC1/ADC2直通及恢复原硬件条目为历史记录；当前配置见本文末尾的
+新参考三路模拟输入适配记录。诊断宏、每秒电平统计及其测试步骤不再适用。
+
+新板反馈启动上行类似REF、随后人声能量低。本次先只验证ADC0原始采集，不作根因结论。
+audio.c临时开启MYBOT_CAPTURE_ADC0_PASSTHROUGH，bitmap=0x1、chl_num=1、AEC追加参考关闭、
+DMIC关闭，hw_ref_ch=ONBOARD_MIC_HW_REF_CH_NONE。ADC0保持差分、16kHz/S16、20+16 dB增益。
+不初始化/注册AEC元素，链路仅mic→raw；链接后校验raw输入caps为单ADC0、ref=AUTO(0xFF)。
+原三通道AEC分支保留，宏设0可恢复。播放、UI与CLI逻辑保留。
+
+每16000个有效样本打印mean_abs/peak/削顶计数，元数据统计在io_end前执行，继续持有在途
+I/O引用，退出不会访问已释放context；无新增运行期分配、无PCM日志或异步缓存。
+已核对当前公开mybot_audio.h、V2 mic配置及caps传播合同；SDK/AOSL摘要与锁一致，AVDK未修改。
+原工程AP/CP编译打包通过，AP Flash 1,878,460字节、RAM 157,524字节，DTCM 2,976字节；
+AP音频对象无aec_v3_algorithm_init引用。固件为build/bk7259/mybot/package/all-app.bin，
+实机ADC0能量及RTC声音待用户烧录验证。SDK仍e7793eba、AVDK90aaf113d、Solution基线a9a7da4，
+本次工作区修改未提交。
+
+## 2026-10-15 新板ADC1直通对照
+
+诊断分支切为MYBOT_CAPTURE_ADC1_PASSTHROUGH，仅启用物理ADC1（bitmap=0x2、chl_num=1），
+配置chl_cfg[1]差分、模拟20 dB、数字16 dB，未作极性补偿。仍为16kHz/S16单声道、
+mic→raw→RTC，hw_ref=NONE、DMIC/AEC/双麦/NS关闭。唯一输出lane为物理ADC1，无需软件抽取。
+电平统计与ADC0版一致，日志标记ADC1；ADC0固件已保存在本地临时分析目录供回退对照。
+
+原工程AP/CP编译打包通过，AP Flash 1,878,468字节、RAM 157,524字节、DTCM 2,976字节。
+音频对象无AEC初始化引用，SDK/AOSL摘要仍匹配锁，AVDK保持干净。实机在相同音量、
+30cm距离和相同语句下的采集对照待验证；单独先后录音不用于判断两颗MIC的相对极性。
+
+## 2026-10-15 新板ADC2回采直通验证
+
+诊断分支切为MYBOT_CAPTURE_ADC2_PASSTHROUGH，只启用物理ADC2（bitmap=0x4、chl_num=1），
+差分、16kHz/S16单声道，模拟及数字增益均0 dB。链路为mic→raw→RTC，AEC/双麦/NS/DMIC
+继续关闭；无AEC消费者，hw_ref_ch保持NONE255，raw输入caps应为AUTO255，不产生零MIC布局。
+每秒电平日志标识ADC2；原三通道AEC分支保留。ADC1固件已保存到本地临时分析目录。
+
+目标AP/CP编译打包通过，AP Flash 1,878,460字节、RAM 157,524字节、DTCM 2,976字节。
+最终音频对象无AEC初始化引用，SDK/AOSL摘要匹配锁、AVDK保持干净，工作区未提交。
+实验预期为欢迎语播放时有明显回采、人声及无播放期间电平较低；实际接线、电平/削顶及
+499/1498Hz干扰是否仍存在，待用户烧录后的WAV和电平日志确认。
+
+## 2026-10-15 恢复原硬件双麦及ADC2参考AEC
+
+结束新板ADC0/ADC1/ADC2直通诊断，删除诊断宏分支及mean_abs/peak/clipped电平统计，
+恢复此前已验证硬件的三通道差分采集：bitmap=0x7，ADC0/ADC1为模拟MIC，各使用20 dB
+模拟增益及16 dB数字增益；ADC2为HT6872功放回采参考，模拟及数字增益均0 dB。
+DMIC及ADC追加数字参考继续关闭（dmic_en=0、adc_cfg.aec_en=0）。
+
+采集链恢复为onboard_mic_stream_v2→aec_v3_algorithm_v2→raw_stream，AEC使用硬件模式、
+通道内REF2及双麦处理（dual_ch=1），启用传统降噪、关闭VAD，输出16 kHz单声道S16 PCM。
+该配置对应原硬件完整的功放回采电路；R33/R34开路的新板不属于本次恢复目标。
+仅撤销音频诊断改动，已有LCD场景、手动舵机CLI及其他工作区修改保留。
+
+恢复后的bk7259_audio.c与Solution基线a9a7da4中的版本逐字节一致
+（Git blob df74bc5f9f63b4d5f66acbd019fd53a823f76712）。已核对固定SDK提交的
+PORTING.zh-CN.md、EMBEDDED.zh-CN.md、公开mybot_audio.h，以及AVDK V2 MIC/AEC头文件。
+SDK固定为e7793eba，include/src摘要fb7bd88a4d191e3b341c54d8a993b70b4a7b7ea3bd4632411f7899156015fa67；
+AOSL基线84e08608及其已声明BK补丁摘要2e9fc3fa5571972fd31c1ab64546477a98550b6b210e38fec181c0f4daeae64e，
+均与版本锁一致。AVDK仍为90aaf113d且工作区干净，RTSA仍使用原BK7259 1.10.1包。
+
+执行`CCACHE_DIR=/tmp/mybot-r2-audio-compare.f8Cv7n/ccache make -C bk_solution_ai/projects/mybot bk7259 SDK_DIR=/home/junlon2006/workspace/github/junlon2006/mybot-bk7259/bk_avdk_smp`，
+AP/CP及组合打包通过。AP Flash 1,917,788字节、RAM 157,548字节、DTCM 35,744字节；
+新增的算法体积对应恢复的AEC链路。音频对象重新包含aec_v3_algorithm_init引用，
+仅保留三通道/AEC启动信息，不再包含ADC直通诊断及每秒电平日志。
+2026-10-15 17:33生成的package/all-app.bin为3,425,120字节，构建日志位于
+/tmp/mybot-audio-restore-build.log。父/子仓库git diff --check通过；构建目录仍被忽略。
+旧边界检查脚本仍有与本次修改无关的版本/布局假设不匹配，并会扫描mcp-resource参考工程，
+不能据此宣称边界检查通过；本次日志为/tmp/mybot-audio-restore-boundary.log。
+本次仅完成源码及构建验证，原硬件上的上行、AEC和反复启停仍待烧录回归；未提交或推送。
+
+## 2026-10-15 新参考三路模拟输入及追加数字参考AEC
+
+本次唯一参考为mcp-resource/new/bk_solution_ai-release-v4.0.1/projects/beken_robot_r2及
+mcp-resource/new/bk_avdk_smp-release-v4.0.1。R2分支DMIC关闭，bitmap=0x7、chl_num=3，
+ADC0/1/2均差分输入、模拟20 dB和数字16 dB增益，adc.aec_en=3追加数字播放参考，
+hw_ref=NONE255，布局为四条lane：mic[0,1,2]、ref@3。
+
+AEC为hardware/APPEND、默认AUTO参考，adc_ch_num=3、dual_ch=2、传统NS；VAD启用、
+能量阈值500、ec_only_output=1、multi_output_use_ec_out=1。采集块640字节/20 ms、两块缓冲，
+SDK仍接收16 kHz单声道S16 PCM，原音量与生命周期保持，不增加ASR额外端口或UI方向回调。
+
+核对配套AVDK发现其实际仍调用aec_proc，Solution中“临时禁用AEC”的注释已过时。
+旧AVDK只有双麦缓冲，不能直接套用三麦配置；本次从配套新AVDK同步4个必需音频文件：
+AP aec_v3_algorithm_v2.c、对应配置头文件、modules/aec_v3_1.h与AP libaec_v3.a，包含
+三麦解交织、trimic标记与SSL3 sidecar支持，非音频AVDK内容保持。
+
+GPIO12采用新参考的GPIO输出下拉声明，作用为ADC内部比较器放电；未外露pad不代表
+该内部配置无作用。GPIO34/35保留附件的SECOND_FUNC_DISABLE+GPIO_OUTPUT，开机仍HIGH-Z，
+不主动拉低；GPIO2/3 UART2和GPIO47上拉会话键继续保留。此前未烧录的旧DMIC实验未记为
+验收事实。三路采集、AEC与反复启停仍待用户烧录验证。
+
+本次构建及产物核查通过：
+
+- 使用标准工程入口 `CCACHE_DIR=/tmp/mybot-r2-audio-compare.f8Cv7n/ccache make -C bk_solution_ai/projects/mybot bk7259 SDK_DIR="$PWD/bk_avdk_smp"`，AP/CP链接及组合打包成功；日志 `/tmp/mybot-new-r2-trimic-aec-build.log`。
+- 2026-10-15 20:03生成 `build/bk7259/mybot/package/all-app.bin`，3,430,368字节，SHA256 `ad2e4e513569b0915f3b36bae924faf8af9aeef7ff32d4344c0edf6f47d2e428`。
+- AP Flash 1,923,020字节、RAM 157,548字节、DTCM 35,744字节；CP Flash 1,295,948字节、RAM 192,744字节。新的VAD/EC副输出/SSL3另有运行期堆开销，静态RAM数字不代表堆峰值。
+- 最终ELF反汇编确认 `aec_ver=20261014`，map及符号表确认AEC和SSL3均来自当前AVDK的配套新库。库SHA256为 `754ad74651b43cbe2cee29a0a882ee572fa70cf2b16dc4e6dc7006e695e65f90`。
+- 新库 `aec_size(1000)=30272`字节，低于现有32KiB DTCM缓冲；SSL3 sidecar为8968字节。输入每20ms为2560字节（三MIC 1920字节及REF 640字节），主输出640字节。第三路输入用于SSL3分析，不将其宣称为已验证的三麦联合波束成形。
+- `CONFIG_AEC_RUN_ON_M52`保持关闭；该proxy尚未适配三路MIC。本次不注册SSL3方向回调，不关联LCD或舵机。
+- AVDK基线仍为 `90aaf113d78ef875635fcc49587f80fd2a8ddadc`，仅上述4个音频文件有工作区改动，均与用户提供的配套参考文件逐字节一致；保留了参考源码中的CRLF和行尾空白。父仓库和Solution的 `git diff --check`通过；AVDK该检查报告的新增空白字符来自此次原样导入。
+- Solution基线仍为 `a9a7da4f28d0dc8fd86c58faf3095a3251ad4ff1`，其他UI/舵机工作区修改保留。父仓库gitlink未更新，修改未提交或推送，构建目录仍被忽略。
+- 已核对固定SDK提交的PORTING/EMBEDDED及公开 `mybot_audio.h`、新AVDK V2 MIC/AEC与算法头文件；SDK `e7793eba`及AOSL `84e08608`基线/声明补丁的摘要仍与上文版本锁一致。
+- 旧边界脚本的版本、目录与硬件假设未更新，不能宣称检查通过；日志 `/tmp/mybot-new-r2-trimic-aec-boundary.log`。本次按用户指定的新参考同步AVDK音频依赖，属于已报告的依赖变更。
+
+预期启动日志应包含 `capture layout verified: bitmap=0x7 lanes=4 mic=[0,1,2] appended_ref=3`
+及底层 `aec ver:20261014`。这两项确认运行配置和算法版本，实际声音、AEC、CPU负载及
+反复启停仍需设备回归；没有仅凭编译结果宣称硬件音频问题已修复。
+
+## 2026-10-16 关闭VAD及舵机控制对比
+
+按用户要求将当前音频AEC配置的vad_enable设为0，关闭VAD。三路差分模拟输入、
+20/16 dB增益、ADC追加数字参考、四lane布局、硬件APPEND AEC、传统NS、EC输出选择、
+640字节/20 ms两块缓冲及16 kHz单声道S16 SDK接口均保持；不添加运行期采集电平日志。
+上文2026-10-15的VAD开启配置仅代表当时构建，不代表当前对比固件。
+
+AP defconfig设置“# CONFIG_MYBOT_GIMBAL is not set”，不编入舵机控制模块，不启用其
+GPIO2/3 UART2映射，不注册gimbal_cmd/gimbal_scene CLI，也不执行舵机初始化或回中。
+舵机源代码和命令说明保留，重新启用CONFIG_MYBOT_GIMBAL=y后可用；MCP LCD表情、
+GPIO47会话按键及其他产品功能保持。本次仅关闭固件控制，不能据此认定电机已物理断电。
+
+首次增量构建仍沿用旧生成配置中的CONFIG_MYBOT_GIMBAL=y，已执行clean并重新生成配置，
+避免将缓存构建误认为已关闭舵机。随后完整配置流程触发AP预编译库校验失败，定位到
+上一轮替换libaec_v3.a后遗漏更新库校验清单；未通过关闭或绕过校验继续构建。
+
+使用厂商compute_files_hash.py按当前实际AP库集合重新计算，更新
+bk_avdk_smp/ap/components/bk_libs/bk7259_ap/hash/libs_hash.txt为
+b60a283b606775768bf928606f8bb332。新参考包含不同的完整库集合，不能直接照搬其98a4开头
+的校验值。当前AVDK改动为4个音频文件及1个配套库校验清单；2026-10-15条目保留当时记录，
+校验清单补齐发生在本次clean重生成配置后。
+
+完整构建与产物核查已通过，实际音频和AEC效果仍待用户烧录验证：
+
+- 执行工程 `clean` 后使用标准双核构建入口重新编译；AP/CP与组合打包成功，AP库校验通过。最终日志为 `/tmp/mybot-trimic-no-vad-no-gimbal-clean-build.log`。
+- 生成配置确认 `# CONFIG_MYBOT_GIMBAL is not set`，sdkconfig.h不再定义该开关；静态库和最终ELF均没有舵机worker/控制实现，`bk7259_gimbal_cli_init`反汇编只有返回0，不注册命令。
+- 最终音频对象中的启动信息为 `AEC geometry: R2 appended REF trimic=1 NS=traditional VAD=0 EC_out=1`，布局仍为 `bitmap=0x7 lanes=4 mic=[0,1,2] appended_ref=3`。
+- 2026-10-16 10:34生成的 `build/bk7259/mybot/package/all-app.bin` 为3,413,280字节，SHA256 `7b2176b7f37c6f3b089cae246ce7456d49b3429850b7dab28190b897e01a5221`。
+- AP Flash 1,905,948字节、RAM 157,244字节、DTCM 35,744字节。此前三路输入算法与库保持，AVDK本轮只补库校验清单。
+- SDK/AOSL内容摘要再次与版本锁一致；父仓库和Solution的 `git diff --check`通过。旧边界脚本仍受已记录的旧版本/硬件/参考目录扫描规则影响而未通过，日志 `/tmp/mybot-trimic-no-vad-no-gimbal-boundary.log`。
+- 本轮重新核对公开音频合同、V2 AEC的VAD关闭路径及舵机Kconfig/CMake/GPIO/CLI条件；MyBot、AOSL、RTSA与两个仓库基线均沿用上文版本，工作区未提交或推送。

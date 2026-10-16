@@ -2,8 +2,10 @@
 #include "bk7259_ops.h"
 #include "bk7259_expression.h"
 #include "bk7259_factory_reset.h"
+#include "bk7259_gimbal.h"
 #include "bk7259_lcd.h"
 #include "bk7259_platform_log.h"
+#include "display/expression_policy.h"
 #include "display/lvgl_view.h"
 
 #include <api/aosl_atomic.h>
@@ -88,8 +90,12 @@ typedef struct {
     bool pending;
     bool factory_reset_active;
     bk7259_factory_reset_screen_t factory_reset_screen;
-    bool expression_override;
-    bk7259_expression_t expression;
+    /* State edges and one-shot requests are recorded before snapshots coalesce.
+     * Only the UI owner submits faces and starts their display clocks. */
+    bk7259_expression_policy_t expression_policy;
+    bool expression_displayed;
+    bk7259_expression_t displayed_expression;
+    bk7259_expression_source_t displayed_source;
     mybot_lcd_content_t latest;
     bk7259_lcd_runtime_status_t runtime_status;
     char provisioning_ssid[LCD_SSID_CAPACITY];
@@ -284,22 +290,48 @@ static void ui_worker(void *arg)
         /* Serialize the brief content application with SDK detach and portal
          * updates. The snapshot lock is never held during rendering/flush. */
         if (rtos_lock_mutex(&s_snapshot_lock) == BK_OK) {
-            if (s_lcd.pending && s_lcd.accepting) {
+            if (s_lcd.accepting) {
                 if (s_lcd.factory_reset_active) {
-                    bk7259_lvgl_view_show_factory_reset(s_lcd.factory_reset_screen);
+                    if (s_lcd.pending)
+                        bk7259_lvgl_view_show_factory_reset(s_lcd.factory_reset_screen);
+                    s_lcd.expression_displayed = false;
                 } else {
-                    mybot_lvgl_view_update(&s_lcd.latest, s_lcd.provisioning_ssid,
-                                           &s_lcd.runtime_status);
-                    if (s_lcd.latest.screen == MYBOT_LCD_SCREEN_READY ||
-                        s_lcd.latest.screen == MYBOT_LCD_SCREEN_IN_CONVERSATION) {
-                        bk7259_expression_t expression = s_lcd.expression_override
-                            ? s_lcd.expression
-                            : (s_lcd.latest.screen == MYBOT_LCD_SCREEN_IN_CONVERSATION
-                                   ? BK7259_EXPRESSION_GREETING
-                                   : BK7259_EXPRESSION_NEUTRAL);
-                        if (bk7259_lvgl_view_show_expression(expression) < 0) {
+                    if (s_lcd.pending)
+                        mybot_lvgl_view_update(&s_lcd.latest, s_lcd.provisioning_ssid,
+                                               &s_lcd.runtime_status);
+                    bk7259_expression_t expression;
+                    bool replay;
+#if CONFIG_MYBOT_LVGL_UI_ANIMATIONS
+                    const uint32_t transition_ms = BK7259_EXPRESSION_TRANSITION_MS;
+#else
+                    const uint32_t transition_ms = 0;
+#endif
+                    /* Timed changes run even when no SDK snapshot is pending. */
+                    if (bk7259_expression_policy_select(&s_lcd.expression_policy,
+                                                        rtos_get_time(), transition_ms,
+                                                        &expression, &replay)) {
+                        int result = replay
+                            ? bk7259_lvgl_view_replay_expression(expression)
+                            : bk7259_lvgl_view_show_expression(expression);
+                        if (result < 0) {
                             MYBOT_LOGW(TAG, "expression update rejected: %d", (int)expression);
+                        } else {
+                            bk7259_expression_source_t source = s_lcd.expression_policy.source;
+                            bk7259_expression_policy_displayed(&s_lcd.expression_policy,
+                                                               rtos_get_time());
+                            if (!s_lcd.expression_displayed || replay ||
+                                s_lcd.displayed_expression != expression ||
+                                s_lcd.displayed_source != source) {
+                                MYBOT_LOGI(TAG, "LCD expression -> %s source=%s",
+                                           bk7259_expression_name(expression),
+                                           bk7259_expression_source_name(source));
+                            }
+                            s_lcd.expression_displayed = true;
+                            s_lcd.displayed_expression = expression;
+                            s_lcd.displayed_source = source;
                         }
+                    } else {
+                        s_lcd.expression_displayed = false;
                     }
                 }
                 s_lcd.pending = false;
@@ -677,8 +709,8 @@ int bk7259_lcd_prepare(void)
     s_lcd.provisioning_ssid[0] = '\0';
     s_lcd.pending = false;
     s_lcd.factory_reset_active = false;
-    s_lcd.expression_override = false;
-    s_lcd.expression = BK7259_EXPRESSION_NEUTRAL;
+    bk7259_expression_policy_init(&s_lcd.expression_policy);
+    s_lcd.expression_displayed = false;
     s_lcd.accepting = true;
     s_lcd.sdk_attached = false;
     /* No other LVGL calls after this transfer until worker_done. */
@@ -718,6 +750,10 @@ void bk7259_lcd_shutdown(void)
     s_lcd.sdk_attached = false;
     s_lcd.prepared = false;
     s_lcd.pending = false;
+    bk7259_expression_policy_cancel(&s_lcd.expression_policy);
+    if (bk7259_gimbal_set_conversation(false) < 0) {
+        MYBOT_LOGW(TAG, "gimbal shutdown cancellation rejected");
+    }
     unlock(&s_snapshot_lock);
     if (resources_owned()) {
         MYBOT_LOGI(TAG, "LVGL UI stopping");
@@ -738,6 +774,37 @@ static bool valid_content(const mybot_lcd_content_t *content)
            memchr(content->pair_code, '\0', sizeof(content->pair_code)) != NULL;
 }
 
+/* Calls only copy to the gimbal owner's mailbox. That owner never calls LCD
+ * while holding its request lock, so snapshot -> gimbal lock ordering is fixed. */
+static void set_gimbal_conversation(bool active)
+{
+    if (bk7259_gimbal_set_conversation(active) < 0) {
+        MYBOT_LOGW(TAG, "gimbal conversation request rejected: active=%d", (int)active);
+    }
+}
+
+static int read_emotion(uint32_t indicators, bk7259_expression_t *expression)
+{
+    switch (indicators & MYBOT_LCD_INDICATOR_EMOTION_MASK) {
+    case MYBOT_LCD_INDICATOR_HAPPY:
+        *expression = BK7259_EXPRESSION_HAPPY;
+        return 1;
+    case MYBOT_LCD_INDICATOR_SAD:
+        *expression = BK7259_EXPRESSION_SAD;
+        return 1;
+    case MYBOT_LCD_INDICATOR_ANGRY:
+        *expression = BK7259_EXPRESSION_ANNOYED;
+        return 1;
+    case MYBOT_LCD_INDICATOR_SURPRISED:
+        *expression = BK7259_EXPRESSION_SURPRISED;
+        return 1;
+    case MYBOT_LCD_INDICATOR_NONE:
+        return 0;
+    default:
+        return -1;
+    }
+}
+
 /* Caller holds snapshot lock. No borrowed SDK pointer crosses this boundary. */
 static int publish_content(const mybot_lcd_content_t *content)
 {
@@ -749,12 +816,28 @@ static int publish_content(const mybot_lcd_content_t *content)
     if (s_lcd.factory_reset_active) {
         return 0;
     }
-    if (s_lcd.latest.screen != content->screen ||
-        (content->screen != MYBOT_LCD_SCREEN_READY &&
-         content->screen != MYBOT_LCD_SCREEN_IN_CONVERSATION)) {
-        s_lcd.expression_override = false;
+    bk7259_expression_t expression = BK7259_EXPRESSION_NEUTRAL;
+    const bool in_conversation = content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION;
+    const int emotion = in_conversation
+        ? read_emotion(content->indicators, &expression) : 0;
+    if (emotion < 0) {
+        MYBOT_LOGW(TAG, "mutually exclusive emotion indicators required: 0x%x",
+                   (unsigned)(content->indicators & MYBOT_LCD_INDICATOR_EMOTION_MASK));
+        return -1;
+    }
+    if ((s_lcd.latest.screen == MYBOT_LCD_SCREEN_IN_CONVERSATION) != in_conversation) {
+        set_gimbal_conversation(in_conversation);
+    }
+    bk7259_expression_policy_update(&s_lcd.expression_policy, content, rtos_get_time());
+    /* Consume the one-shot before retaining the ordinary latest snapshot.
+     * Consecutive requests for the same scene intentionally restart it. */
+    if (emotion) {
+        if (!bk7259_expression_policy_mcp(&s_lcd.expression_policy, expression))
+            return -1;
+        MYBOT_LOGI(TAG, "MCP expression requested: %s", bk7259_expression_name(expression));
     }
     s_lcd.latest = *content;
+    s_lcd.latest.indicators &= ~MYBOT_LCD_INDICATOR_EMOTION_MASK;
     s_lcd.pending = true;
     notify(&s_lcd.wake);
     return 0;
@@ -769,7 +852,8 @@ int bk7259_lcd_show_factory_reset(bk7259_factory_reset_screen_t screen)
     int ret = -1;
     if (s_lcd.prepared && s_lcd.accepting && !aosl_atomic_read(&s_lcd.stopping)) {
         s_lcd.factory_reset_active = true;
-        s_lcd.expression_override = false;
+        bk7259_expression_policy_cancel(&s_lcd.expression_policy);
+        set_gimbal_conversation(false);
         s_lcd.factory_reset_screen = screen;
         s_lcd.pending = true;
         notify(&s_lcd.wake);
@@ -797,9 +881,7 @@ int bk7259_lcd_set_expression(bk7259_expression_t expression)
     }
     int ret = -1;
     if (can_show_expression()) {
-        if (!s_lcd.expression_override || s_lcd.expression != expression) {
-            s_lcd.expression_override = true;
-            s_lcd.expression = expression;
+        if (bk7259_expression_policy_local(&s_lcd.expression_policy, expression)) {
             s_lcd.pending = true;
             notify(&s_lcd.wake);
             MYBOT_LOGI(TAG, "expression requested: %s", name);
@@ -817,8 +899,7 @@ int bk7259_lcd_clear_expression(void)
     }
     int ret = -1;
     if (can_show_expression()) {
-        if (s_lcd.expression_override) {
-            s_lcd.expression_override = false;
+        if (bk7259_expression_policy_clear(&s_lcd.expression_policy)) {
             s_lcd.pending = true;
             notify(&s_lcd.wake);
             MYBOT_LOGI(TAG, "expression override cleared");
@@ -913,9 +994,15 @@ static void lcd_sdk_destroy(void *context)
         return;
     }
     /* Product UI remains alive for provisioning, lifecycle text and reset.
-     * Preserve pending snapshots when the SDK detaches; the product publishes
-     * the final stopped status after mybot_stop() returns. */
+     * Retain workflow text, but never a request from the detached conversation. */
     s_lcd.sdk_attached = false;
+    bk7259_expression_policy_cancel(&s_lcd.expression_policy);
+    s_lcd.latest.indicators = MYBOT_LCD_INDICATOR_NONE;
+    set_gimbal_conversation(false);
+    if (s_lcd.accepting && !aosl_atomic_read(&s_lcd.stopping)) {
+        s_lcd.pending = true;
+        notify(&s_lcd.wake);
+    }
     unlock(&s_snapshot_lock);
 }
 
