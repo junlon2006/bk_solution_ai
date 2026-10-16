@@ -1,5 +1,8 @@
 # BK7259 LVGL UI 验证记录
 
+本文前半保留旧状态卡片UI的历史测试；该视图已由本文末尾2026-10-16记录的旧硬件像素眼镜UI
+替换。历史截图、内存与主题测试结果不代表新视图已通过验证，当前实现以最新条目为准。
+
 本次在原工程接入 `mybot-esp32` 的语义状态视图，默认中文、深色、启用状态动画。
 实现位于 `components/mybot/mybot_sdk/platforms/bk7259/{bk7259_lcd.c,display/}`；
 项目配置为 `ap/lv_conf_custom.h` 和 `ap/config/bk7259_ap/defconfig`。
@@ -142,3 +145,46 @@ SHA256为496915e16230ae62bbcff6825c2389e417026c2f2fd0bf3e4fadd28dd92a42bd。
 逐文件核对确认audio、key、video、usr_gpio及defconfig与旧硬件基线一致，LCD渲染器及
 整个display目录无差异；生成配置仍为JD9855、ADC_KEY、VIDEO=y、5 fps。
 AVDK仍固定f699c50f且工作树干净。此次仅完成SDK及构建验证，新的命令和会话行为仍待真机回归。
+
+## 2026-10-16 旧硬件工艺灰与像素眼镜UI
+
+SDK同步已先独立提交为父仓库5ebe531c258c3eab9e013118ac78e094464d4f7d及Solution
+edfee2885defa9a4fc2c314aa836dc6689678510；本条仅记录其后的UI阶段。SDK仍为e7793eba，
+AVDK仍固定f699c50f2ee72e7ca014c8f009e0d40f1eeb059a。新UI采用模拟器工艺灰/像素眼镜，
+替换旧状态卡片；保留旧JD9855原生320x385、逻辑385x320及GPIO53供电/GPIO5复位/GPIO7
+背光低有效的显示后端。
+
+用户实物照片确认屏幕四角为明显圆弧；布局及原生预览需按保守圆角遮罩验证，确保终端文字、
+配对码和眼镜主体不被遮挡。照片无法确定精确硬件半径，预览遮罩参数只作为设计/验收假设，
+实际圆角效果以本次用户实机反馈为准。
+
+完整23个表情均可本地选择，四行终端显示当前表情和真实运行状态，会话中显示阶段/声纹文本。
+READY显示NEUTRAL；进入会话SURPRISED保持300 ms，另计进入过渡；LISTENING显示聆听，
+THINKING连续三秒后PROCESSING，SPEAKING或无阶段时NEUTRAL。MCP HAPPY/SAD/ANGRY/
+SURPRISED映射HAPPY/SAD/ANNOYED/SURPRISED，分别保持2000/3000/1200/800 ms；
+开启动画时每次保持另加250 ms进入过渡。同名新命令重播，新命令替换旧前景，SDK原有
+command ID去重不变。普通状态/声纹更新不重置保持计时，到期恢复最新自动表情；离开会话
+清除计时，必要引导优先；恢复出厂保留旧板原流程，没有导入R2的5秒按键或复位阶段界面。
+所有表情仅渲染LCD，不发送电机命令。
+
+表情策略和LVGL继续由现有UI owner驱动，不新增UI线程、定时器或UTC依赖。旧defconfig
+保留原语言/动画/浅色主题字段，LIGHT_THEME仅作兼容，新像素视图固定工艺灰；仅UI相关
+Kconfig说明更新。四ADC按键、约2秒长按配网及原恢复出厂逻辑、双DMIC采集/AEC和GPIO20
+功放控制、摄像头GPIO70/71/31/32、其他电源/GPIO、分区及AVDK均保留旧硬件配置。
+本次验证结果：
+
+- 画面等比缩放为346x302，位置(19,9)。终端9px、签名10px，四行Y为45/58/71/84，行高12px、行距13px；最长会话/声纹行185px，低于220px可用宽度。
+- 配对码按用户确认的固定6位数字布局，固定Montserrat32字号，不再按长度切换字体。示例135790的实际字形范围108x35px。配网SSID和引导标签预留两行52px高度，避免旧小屏上的第二行裁切。
+- 9/10px字体新增bitmap1757字节，ARM对象含字形/映射结构的新增只读符号共2913字节；无新增整帧缓冲、UI线程或运行期PCM/串口日志。
+- Native LVGL以ASAN/UBSAN验证385x320中文、英文、无动画及640x480英文兼容配置，均通过36页面截图、23表情及六个动画阶段、phase/VP更新、文字范围、引导页和11轮生命周期检查。LSAN因宿主ptrace限制关闭，不宣称已完成泄漏检测。
+- 圆角预览采用保守逻辑半径90px，不视为实测硬件参数。可见文字矩形四角及所有非背景像素均通过遮罩边界检查，包括过渡帧；中文/英文固定6位配对码、32字节SSID及眼镜主体完整位于安全区。
+- 圆角总览 `/tmp/mybot-jd9855-pixel-ui.qwcFd4/rounded-r90-contact.png`，23表情总览同目录 `23-expressions-rounded-r90.png`；native harness为该目录的main.cc/CMakeLists.txt。主代理已查看配对和多页面圆角预览。
+- 表情策略原生测试13组、462断言通过；当前文案所需140个UI字形覆盖检查通过。父仓库与Solution的 `git diff --check`通过。
+- 标准AP/CP构建和组合打包通过，日志 `/tmp/mybot-main-pixel-ui-build.log`。2026-10-16 15:41生成 `build/bk7259/mybot/package/all-app.bin`，3,412,064字节，SHA256为 `7683238228313e21983b1c44ba05c126028a36e5010e65aa176cf5bad489c003`。
+- AP Flash 1,904,716字节、RAM 158,284字节、DTCM 35,744字节；相比本次独立SDK提交时Flash减少40,960字节、静态RAM增加2368字节。静态RAM不代表LVGL及音视频并行运行时的堆峰值。
+- 再次逐文件确认audio/key/video、AP defconfig/usr_gpio、CP与partitions相对edfee28没有差异；LCD电源/teardown及旋转/flush区块保持原样。AVDK f699c50f仍干净，SDK/AOSL摘要仍与版本锁一致，RTSA保持1.10.1 build1278380。
+- 本次读取已选SDK的完整PORTING/EMBEDDED、LCD/platform/HTTPS/lifecycle合同与LVGL9.5对应API；旧边界脚本仍有已记录的版本/目录/旧显示规则不匹配，日志 `/tmp/mybot-main-sdk-sync-boundary.log`，不宣称其通过。
+
+2026-10-16用户烧录本版旧硬件UI后反馈“测试通过”，据此将UI改动单独提交，并更新父仓库
+的Solution依赖指针。SDK同步仍保留为此前的独立提交，AVDK版本不变，本次未推送。
+长时间运行及同时音视频的资源峰值继续保留为专项验证项。

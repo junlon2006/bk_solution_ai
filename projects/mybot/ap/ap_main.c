@@ -11,6 +11,7 @@
 #include <mybot/mybot_version.h>
 
 #include <mybot_bk7259_platform.h>
+#include <bk7259_lcd.h>
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -50,6 +51,8 @@ static const char *mybot_state_name(mybot_state_t state)
         return "STOPPING";
     case MYBOT_STATE_IN_CONVERSATION:
         return "IN_CONVERSATION";
+    case MYBOT_STATE_PAIRING:
+        return "PAIRING";
     default:
         return "UNKNOWN";
     }
@@ -65,6 +68,19 @@ static void mybot_log_state_transition(mybot_state_t *last_state, bool *valid)
         return;
     }
     current = mybot_get_state();
+    /* Publish a copied presentation snapshot at the existing SDK boundary.
+     * The SDK retains state ownership; the product's polling cadence is unchanged. */
+    const char *state_name = mybot_state_name(current);
+    char display_state[BK7259_LCD_STATE_CAPACITY];
+    size_t state_length = 0;
+    while (state_length + 1 < sizeof(display_state) && state_name[state_length]) {
+        char value = state_name[state_length];
+        display_state[state_length++] = value >= 'A' && value <= 'Z'
+                                            ? (char)(value + ('a' - 'A')) : value;
+    }
+    display_state[state_length] = '\0';
+    (void)bk7259_lcd_set_runtime_status(display_state,
+                                      current == MYBOT_STATE_IN_CONVERSATION);
     if (!*valid) {
         BK_LOGI(TAG, "runtime state=%s(%d)\r\n", mybot_state_name(current),
                 (int)current);

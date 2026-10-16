@@ -1,19 +1,21 @@
 menu "MyBot BK7259 platform"
 
     config MYBOT_LVGL_UI_ANIMATIONS
-        bool "Animate MyBot status indicators"
+        bool "Animate pixel glasses and terminal cursor"
         default y
         depends on LVGL && LVGL_V9
         help
-            Animate the listening, thinking and speaking indicators at up to
-            10 frames per second in the product-owned UI thread.
+            Animate pixel-glasses expressions at up to 20 frames per second,
+            fade between faces in 250 ms, and blink the terminal cursor every
+            500 ms in the existing product-owned UI thread.
 
     config MYBOT_LVGL_UI_LIGHT_THEME
-        bool "Use MyBot light UI theme"
+        bool "Legacy light theme setting"
         default n
         depends on LVGL && LVGL_V9
         help
-            Use a light background. The default is the dark MyBot theme.
+            Retained for existing saved configurations. The pixel-glasses
+            renderer always uses its fixed process-gray skin.
 
     config MYBOT_VIDEO
         bool "Enable MyBot encoded video uplink"

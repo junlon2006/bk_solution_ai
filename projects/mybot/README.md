@@ -13,9 +13,10 @@ The SDK snapshot follows upstream `main` commit
 HTTPS-body logging patch. It adds RTM DeviceCommand v1 for volume, mute and four
 emotions without a UTC dependency, and moves binding polls/stop notifications to
 a background service queue so local hangup completes before HTTP notification.
-The current old-board UI handles voiceprint/server phases and ignores emotion
-bits 4-7; UI integration follows in a separate change. This SDK-only update
-keeps AVDK, audio, keys, video, power, GPIO and partitions unchanged.
+The SDK synchronization was committed before the separate pixel-glasses UI
+update. The UI now consumes emotion bits 4-7 as LCD-only expressions alongside
+voiceprint/server phases. AVDK, audio, keys, video, power, GPIO and partitions
+retain the old-board configuration.
 
 ## 2. AP and CP Roles
 
@@ -89,7 +90,56 @@ Video configuration is defined in:
 After changing video configuration, run a clean rebuild so the generated
 configuration cannot retain stale values.
 
-## 5. Real-Device Validation
+## 5. Display and Expressions
+
+The JD9855 panel retains its native 320x385 geometry and logical 385x320 RGB565
+surface, GPIO53 power, GPIO5 reset and active-low GPIO7 backlight. Its LVGL view
+keeps terminal text, pairing codes and the main glasses artwork inside the
+visible area of the panel's pronounced rounded corners; their physical radius
+has not been measured precisely. The view
+uses the simulator's process-gray skin and pixel glasses, with four terminal
+rows for mood, runtime state and conversation phase/voiceprint text. Startup,
+provisioning, web-console pairing and errors retain bilingual guidance;
+factory reset keeps the original board workflow. The artwork is 346x302 at (19,9),
+with 9-pixel terminal rows and a 10-pixel signature. Pairing codes are exactly
+six digits and use a fixed 32-pixel size. The legacy light-theme option is retained for saved configurations;
+the pixel renderer always uses the fixed process-gray appearance.
+
+| Runtime or accepted command | Face and timing |
+| --- | --- |
+| READY / hangup | NEUTRAL |
+| Enter conversation | SURPRISED, 300 ms hold plus entering transition |
+| LISTENING | LISTENING |
+| THINKING | THINKING; PROCESSING after three continuous seconds |
+| SPEAKING / no phase | NEUTRAL |
+| MCP HAPPY / SAD / ANGRY / SURPRISED | HAPPY / SAD / ANNOYED / SURPRISED; 2 s / 3 s / 1.2 s / 0.8 s hold |
+
+With animations enabled, each entering transition adds 250 ms before its hold.
+A new accepted MCP command replaces the current foreground and replays even the
+same expression name; SDK command-ID deduplication still applies. Ordinary state
+and voiceprint updates do not restart a foreground hold. Expiry restores the
+latest automatic phase face, including PROCESSING if thinking has continued
+for three seconds in the background. Leaving a conversation clears its timers;
+operating guidance and factory reset take precedence. Expressions control LCD
+artwork only and do not send motor commands.
+
+The 23 expression names are:
+
+```text
+NEUTRAL, GREETING, HAPPY, EXCITED, CURIOUS, CONFUSED, THINKING, LISTENING,
+SURPRISED, SHY, PROUD, LOVE, SLEEPY, BORED, SAD, PLEADING, APOLOGY, WORRIED,
+ANNOYED, REFUSE, PROCESSING, ERROR, SLEEP
+```
+
+`include/bk7259_expression.h` provides name conversion and copied local display
+requests via `bk7259_lcd_set_expression()` / `bk7259_lcd_clear_expression()`.
+Local overrides persist until cleared, a workflow change, or a later explicit
+MCP request; repeating a local override does not replay it. Clearing restores
+the latest automatic face. ERROR and SLEEP artwork do not change runtime state.
+The existing display owner performs rendering, animations and expiration;
+no additional UI thread or UTC clock is required.
+
+## 6. Real-Device Validation
 
 - [ ] Cold boot the combined `all-app.bin` and confirm both AP and CP start.
 - [ ] Confirm the installed GC2053 or CV2005 camera is detected and the source reports 1280x720 at 5 fps with 640x480 H.264 output.
@@ -99,3 +149,7 @@ configuration cannot retain stale values.
 - [ ] Verify a periodic IDR about every 6 seconds and that an RTSA key-frame request forces a new IDR.
 - [ ] Exercise constrained Wi-Fi and confirm RTSA bitrate updates stay within 256-512 kbit/s without breaking audio.
 - [ ] End, restart, and interrupt conversations repeatedly; confirm the encoder, frame pool, camera, and RTC resources stop and restart cleanly.
+- [ ] Check all 23 faces, four terminal rows, both languages and pairing guidance on the 385x320 logical display; terminal text, pairing codes and the main glasses artwork must remain visible inside all four rounded corners.
+- [ ] Verify the SURPRISED opener, phase transitions and three-second THINKING timeout; hangup must restore NEUTRAL.
+- [ ] Verify MCP replacement, same-name new-command replay and hold expiry without motor output; repeated phase/voiceprint updates must preserve foreground timing.
+- [ ] Regress the original four ADC keys, long-press provisioning/factory reset, audio and video while exercising UI animations.
